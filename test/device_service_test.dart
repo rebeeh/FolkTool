@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:FolkTool/core/config/app_config.dart';
 import 'package:FolkTool/core/process/process_runner.dart';
 import 'package:FolkTool/features/device/models/device_info.dart';
 import 'package:FolkTool/features/device/providers/device_provider.dart';
 import 'package:FolkTool/features/device/services/device_service.dart';
+import 'package:FolkTool/generated/l10n.dart';
 
 class _FakeProcessRunner implements ProcessRunner {
   final Future<ProcessResult> Function(String executable, List<String> args)
@@ -24,6 +26,10 @@ class _FakeProcessRunner implements ProcessRunner {
 }
 
 void main() {
+  setUpAll(() async {
+    await S.load(const Locale('en'));
+  });
+
   group('DefaultProcessRunner', () {
     test('executes direct executable without shell and returns stdout', () async {
       const runner = DefaultProcessRunner(timeout: Duration(seconds: 5));
