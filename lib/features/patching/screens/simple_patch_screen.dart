@@ -5,6 +5,7 @@ import '../../../core/errors/app_error.dart';
 import '../../../core/logging/log_entry.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/log_console.dart';
+import '../../../core/widgets/responsive_layout.dart';
 import '../../../generated/l10n.dart';
 import '../../device/providers/device_provider.dart';
 import '../../files/services/file_service.dart';
@@ -104,6 +105,7 @@ class _SimplePatchScreenState extends State<SimplePatchScreen> {
   }
 
   Future<void> _exportDiagnostics(BuildContext context) async {
+    final l10n = S.of(context);
     final patchProvider = context.read<PatchProvider>();
     final device = context.read<DeviceProvider>().currentDevice;
     final redact = context.read<SettingsProvider>().redactDiagnostics;
@@ -113,7 +115,7 @@ class _SimplePatchScreenState extends State<SimplePatchScreen> {
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Diagnostics saved: $path')),
+        SnackBar(content: Text(l10n.diagnosticsSaved(path))),
       );
     }
   }
@@ -143,17 +145,21 @@ class _SimplePatchScreenState extends State<SimplePatchScreen> {
         padding: const EdgeInsets.all(20),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 840),
+            constraints: const BoxConstraints(maxWidth: 1020),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const PatchTargetSelector(),
+                const ResponsivePairGrid(
+                  breakpoint: 860,
+                  first: PatchTargetSelector(),
+                  second: VersionSelector(),
+                ),
                 const SizedBox(height: 16),
-                const VersionSelector(),
-                const SizedBox(height: 16),
-                const BootImageSelectorCard(),
-                const SizedBox(height: 16),
-                const KpmModulesSelectorCard(),
+                const ResponsivePairGrid(
+                  breakpoint: 860,
+                  first: BootImageSelectorCard(),
+                  second: KpmModulesSelectorCard(),
+                ),
                 const SizedBox(height: 20),
                 _SimplePatchActionBar(
                   isSaving: _isSaving,
