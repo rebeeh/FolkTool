@@ -222,45 +222,33 @@ def generate_l10n_dart(en_entries: dict[str, str]) -> str:
 
     for k, val in en_entries.items():
         args = extract_placeholders(val)
-        safe_doc = val.replace('\n', ' ')
-        lines.append(f'  /// `{safe_doc}`')
         if args:
             sig = ', '.join(f'Object {a}' for a in args)
             tpl = dart_sq_with_vars(val, args)
             args_list = ', '.join(args)
-            lines.extend([
-                f'  String {k}({sig}) {{',
-                '    return Intl.message(',
-                f'      {tpl},',
-                f"      name: '{k}',",
-                "      desc: '',",
-                f'      args: [{args_list}],',
-                '    );',
-                '  }',
-                '',
-            ])
+            lines.append(
+                f"  String {k}({sig}) => Intl.message({tpl}, name: '{k}', desc: '', args: [{args_list}]);"
+            )
         else:
             tpl = dart_sq_with_vars(val, [])
-            lines.extend([
-                f'  String get {k} {{',
-                '    return Intl.message(',
-                f'      {tpl},',
-                f"      name: '{k}',",
-                "      desc: '',",
-                '      args: [],',
-                '    );',
-                '  }',
-                '',
-            ])
+            lines.append(
+                f"  String get {k} => Intl.message({tpl}, name: '{k}', desc: '', args: []);"
+            )
 
-    lines = lines + [
+    lines.extend([
+        '',
+        '  static final Map<String, String> _enMap = {',
+        '  };',
+    ])
+    # Remove unused _enMap; keep AppLocalizationDelegate clean
+    lines = lines[:-2] + [
         '}',
         '',
         'class AppLocalizationDelegate extends LocalizationsDelegate<S> {',
         '  const AppLocalizationDelegate();',
         '',
         '  List<Locale> get supportedLocales {',
-        "    return const <Locale>[Locale.fromSubtags(languageCode: 'en'), Locale.fromSubtags(languageCode: 'zh')];",
+        '    return const <Locale>[Locale.fromSubtags(languageCode: \'en\'), Locale.fromSubtags(languageCode: \'zh\')];',
         '  }',
         '',
         '  @override',
@@ -316,6 +304,7 @@ def main() -> int:
             return 1
         print(f'OK: {len(en_entries)} localization keys verified in EN/ZH ARBs and generated files.')
 
+        # Also scan lib/ for leaked hardcoded UI strings or CJK literals
         lib_root = os.path.join(REPO_ROOT, 'lib')
         leaks = []
         allowed_en = {'English', 'APatch', 'FolkPatch', 'ADB', 'Fastboot', 'Platform-Tools'}
