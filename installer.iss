@@ -186,18 +186,18 @@ begin
   NormalizedDir := RemoveBackslashUnlessRoot(Trim(AppDir));
   if NormalizedDir = '' then Exit;
 
-  // Terminate only processes executing out of FolkTool's own installation directory,
-  // preserving unrelated system tools (e.g. Android Studio's standalone adb.exe).
+  // Terminate only app/helper processes executing out of FolkTool's install directory,
+  // excluding the Inno Setup uninstaller stub itself and external system tools.
   PsCommand :=
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
     '$dir = ''' + EscapePsSingleQuoted(NormalizedDir) + '''.TrimEnd(''\'') + ''\''; ' +
-    '$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) }; ' +
+    '$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) -and ($_.Name -notlike ''unins*.exe'') }; ' +
     'foreach ($p in $procs) { try { $proc = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue; if ($proc) { $null = $proc.CloseMainWindow() } } catch {} }; ' +
     'Start-Sleep -Milliseconds 1500; ' +
-    '$remain = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) }; ' +
+    '$remain = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) -and ($_.Name -notlike ''unins*.exe'') }; ' +
     'foreach ($p in $remain) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }; ' +
     'Start-Sleep -Milliseconds 500; ' +
-    '$still = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) }; ' +
+    '$still = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) -and ($_.Name -notlike ''unins*.exe'') }; ' +
     'if ($still) { exit 1 } else { exit 0 }"';
 
   if Exec('powershell.exe', PsCommand, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
@@ -588,9 +588,11 @@ var
   AppDir: String;
   RemainingFiles: String;
 begin
+  Log('CurUninstallStepChanged phase=' + IntToStr(Ord(CurUninstallStep)));
   if CurUninstallStep = usUninstall then
   begin
     AppDir := ExpandConstant('{app}');
+    Log('Uninstall stopping app-scoped processes in: ' + AppDir);
     if not StopAppScopedProcesses(AppDir) then
     begin
       Log('Warning: one or more FolkTool processes remained active prior to uninstall.');
@@ -616,12 +618,19 @@ begin
     end;
 
     if PurgeData then
+    begin
+      Log('Uninstall PurgeData=true');
       PurgeFolkToolAppData(True);
+    end
+    else
+      Log('Uninstall PurgeData=false');
   end
   else if CurUninstallStep = usPostUninstall then
   begin
     AppDir := ExpandConstant('{app}');
-    RemoveDir(AppDir); // Clean empty root directory if no user-created files remain.
+    Log('PostUninstall checking directory: ' + AppDir);
+    if AppDir <> '' then
+      RemoveDir(AppDir); // Clean empty root directory if no user-created files remain.
 
     RemainingFiles := '';
     if FileExists(AppDir + '\FolkTool.exe') then
