@@ -5,8 +5,10 @@ import '../../../core/errors/app_error.dart';
 import '../../../core/logging/log_entry.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/log_console.dart';
+import '../../../core/widgets/responsive_layout.dart';
 import '../../../generated/l10n.dart';
 import '../../device/providers/device_provider.dart';
+import '../../device/widgets/device_status_card.dart';
 import '../../settings/providers/settings_provider.dart';
 import '../models/operation_step.dart';
 import '../providers/patch_provider.dart';
@@ -62,37 +64,49 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
 
     if (settingsProvider.confirmBeforeFlash) {
       final target = deviceProvider.selectedTargetDevice;
+      final selectedVer = versionProvider.selectedVersion;
+      final deviceLabel = target != null
+          ? '${target.model ?? target.serial} (${target.localizedStateText(l10n)})'
+          : l10n.noneDetected;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Confirm One-Click Flash'),
+          title: Text(l10n.confirmQuickFlashTitle),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(l10n.confirmTargetDevice(deviceLabel)),
+              const SizedBox(height: 6),
               Text(
-                'Target Device: ${target != null ? '${target.model ?? target.serial} (${target.stateText})' : 'None detected'}',
+                l10n.confirmPatchTarget(
+                  versionProvider.currentTarget.displayName,
+                ),
               ),
               const SizedBox(height: 6),
-              Text('Boot Image: ${patchProvider.selectedFilePath}'),
+              Text(
+                l10n.confirmKpVersion(
+                  selectedVer?.displayTitle(l10n) ?? l10n.unknown,
+                ),
+              ),
               const SizedBox(height: 6),
               Text(
-                'KernelPatch Version: ${versionProvider.selectedVersion ?? 'Default'}',
+                l10n.confirmBootImage(patchProvider.selectedFilePath!),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 12),
-              const Text(
-                'This will patch the boot image, reboot to Fastboot, and flash the boot partition. Ensure your bootloader is unlocked and do not disconnect USB during flashing.',
-              ),
+              Text(l10n.confirmQuickFlashBody),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel'),
+              child: Text(l10n.cancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Start Flashing'),
+              child: Text(l10n.startFlashingButton),
             ),
           ],
         ),
@@ -125,6 +139,7 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
   }
 
   Future<void> _exportDiagnostics(BuildContext context) async {
+    final l10n = S.of(context);
     final patchProvider = context.read<PatchProvider>();
     final device = context.read<DeviceProvider>().currentDevice;
     final redact = context.read<SettingsProvider>().redactDiagnostics;
@@ -134,7 +149,7 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Diagnostics saved: $path')),
+        SnackBar(content: Text(l10n.diagnosticsSaved(path))),
       );
     }
   }
@@ -142,7 +157,6 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = S.of(context);
-
     final isRunning = context.select<PatchProvider, bool>((p) => p.isRunning);
 
     return PopScope(
@@ -150,116 +164,128 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Flashing/patching operation is active. Wait or cancel before exiting.',
-              ),
-            ),
+            SnackBar(content: Text(l10n.operationInProgressNavBlocked)),
           );
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.oneClickFlash),
-        actions: [
-          Selector<PatchProvider, bool>(
-            selector: (_, p) => p.logs.isNotEmpty,
-            builder: (context, hasLogs, _) {
-              if (!hasLogs) return const SizedBox.shrink();
-              return IconButton(
-                icon: const Icon(Icons.save_alt),
-                onPressed: () => _exportLogs(context),
-                tooltip: l10n.exportLogsTooltip,
-              );
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 840),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const PatchTargetSelector(),
-                const SizedBox(height: 16),
-                const VersionSelector(),
-                const SizedBox(height: 16),
-                const BootImageSelectorCard(),
-                const SizedBox(height: 16),
-                const KpmModulesSelectorCard(),
-                const SizedBox(height: 20),
-                Selector<
-                    PatchProvider,
-                    ({
-                      FlashingPhase phase,
-                      List<OperationStep> steps,
-                      int currentIndex,
-                    })>(
-                  selector: (_, p) => (
-                    phase: p.phase,
-                    steps: p.steps,
-                    currentIndex: p.currentStepIndex,
-                  ),
-                  builder: (context, progress, _) {
-                    if (progress.steps.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Divider(),
-                        const SizedBox(height: 12),
-                        if (progress.phase != FlashingPhase.idle)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Text(
-                              'Phase: ${progress.phase.name}',
-                              style: Theme.of(context).textTheme.labelMedium,
-                            ),
-                          ),
-                        StepProgress(
-                          steps: progress.steps,
-                          currentIndex: progress.currentIndex,
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-                    );
-                  },
-                ),
-                const Divider(),
-                const SizedBox(height: 16),
-                Selector<PatchProvider, ({List<LogEntry> logs, bool isRunning})>(
-                  key: _logConsoleKey,
-                  selector: (_, p) => (
-                    logs: List<LogEntry>.unmodifiable(p.logs),
-                    isRunning: p.isRunning,
-                  ),
-                  builder: (context, logState, _) {
-                    final patchProvider = context.read<PatchProvider>();
-                    return LogConsole(
-                      logs: logState.logs,
-                      maxHeight: 250,
-                      onExport: () => _exportDiagnostics(context),
-                      onClear:
-                          logState.isRunning ? null : patchProvider.clearLogs,
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-                _QuickPatchActionBar(
-                  isStarting: _isStarting,
-                  onStart: _startPatch,
-                  onViewLogs: _scrollToLogs,
-                ),
-              ],
+        appBar: AppBar(
+          title: Text(l10n.oneClickFlash),
+          actions: [
+            Selector<PatchProvider, bool>(
+              selector: (_, p) => p.logs.isNotEmpty,
+              builder: (context, hasLogs, _) {
+                if (!hasLogs) return const SizedBox.shrink();
+                return IconButton(
+                  icon: const Icon(Icons.save_alt),
+                  onPressed: () => _exportLogs(context),
+                  tooltip: l10n.exportLogsTooltip,
+                );
+              },
             ),
-          ),
+          ],
+        ),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 560;
+            final pad = isCompact ? 14.0 : 20.0;
+
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(pad),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1020),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const DeviceStatusCard(),
+                      const SizedBox(height: 16),
+                      const ResponsivePairGrid(
+                        breakpoint: 860,
+                        first: PatchTargetSelector(),
+                        second: VersionSelector(),
+                      ),
+                      const SizedBox(height: 16),
+                      const ResponsivePairGrid(
+                        breakpoint: 860,
+                        first: BootImageSelectorCard(),
+                        second: KpmModulesSelectorCard(),
+                      ),
+                      const SizedBox(height: 20),
+                      Selector<
+                          PatchProvider,
+                          ({
+                            FlashingPhase phase,
+                            List<OperationStep> steps,
+                            int currentIndex,
+                          })>(
+                        selector: (_, p) => (
+                          phase: p.phase,
+                          steps: p.steps,
+                          currentIndex: p.currentStepIndex,
+                        ),
+                        builder: (context, progress, _) {
+                          if (progress.steps.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Divider(),
+                              const SizedBox(height: 12),
+                              if (progress.phase != FlashingPhase.idle)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: Text(
+                                    l10n.errorStage(progress.phase.name),
+                                    style:
+                                        Theme.of(context).textTheme.labelMedium,
+                                  ),
+                                ),
+                              StepProgress(
+                                steps: progress.steps,
+                                currentIndex: progress.currentIndex,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          );
+                        },
+                      ),
+                      const Divider(),
+                      const SizedBox(height: 16),
+                      Selector<PatchProvider,
+                          ({List<LogEntry> logs, bool isRunning})>(
+                        key: _logConsoleKey,
+                        selector: (_, p) => (
+                          logs: List<LogEntry>.unmodifiable(p.logs),
+                          isRunning: p.isRunning,
+                        ),
+                        builder: (context, logState, _) {
+                          final patchProvider = context.read<PatchProvider>();
+                          return LogConsole(
+                            logs: logState.logs,
+                            maxHeight: 250,
+                            onExport: () => _exportDiagnostics(context),
+                            onClear: logState.isRunning
+                                ? null
+                                : patchProvider.clearLogs,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      _QuickPatchActionBar(
+                        isStarting: _isStarting,
+                        onStart: _startPatch,
+                        onViewLogs: _scrollToLogs,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
-    ),
     );
   }
 }
@@ -444,11 +470,7 @@ class _QuickPatchActionBar extends StatelessWidget {
                     final deviceProvider = context.read<DeviceProvider>();
                     if (!deviceProvider.hasFastbootDevice) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Connect device in Fastboot mode to restore stock boot.',
-                          ),
-                        ),
+                        SnackBar(content: Text(l10n.connectFastbootToRestore)),
                       );
                       return;
                     }
@@ -459,15 +481,15 @@ class _QuickPatchActionBar extends StatelessWidget {
                         SnackBar(
                           content: Text(
                             ok
-                                ? 'Stock boot image restored.'
-                                : 'Failed to restore stock boot image.',
+                                ? l10n.restoreStockBootSuccess
+                                : l10n.restoreStockBootFailed,
                           ),
                         ),
                       );
                     }
                   },
                   icon: const Icon(Icons.restore),
-                  label: const Text('Restore Stock Boot'),
+                  label: Text(l10n.restoreStockBootButton),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
@@ -478,8 +500,7 @@ class _QuickPatchActionBar extends StatelessWidget {
         }
 
         return FilledButton.icon(
-          onPressed:
-              isStarting || state.selectedFile == null ? null : onStart,
+          onPressed: isStarting || state.selectedFile == null ? null : onStart,
           icon: isStarting
               ? SizedBox(
                   width: 18,

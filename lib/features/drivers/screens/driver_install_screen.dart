@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/config/app_semantic_colors.dart';
+import '../../../core/widgets/responsive_layout.dart';
 import '../../../generated/l10n.dart';
 import '../../device/providers/device_provider.dart';
 import '../services/driver_service.dart';
@@ -24,28 +25,26 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Install ${driver.name}?'),
+        title: Text(l10n.driverInstallConfirmTitle(driver.name)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Publisher: ${driver.publisher}'),
+            Text(l10n.driverPublisherLabel(driver.publisher)),
             const SizedBox(height: AppSpacing.xs),
-            Text('Supported Modes: ${driver.supportedModes}'),
+            Text(l10n.driverSupportedModesLabel(driver.supportedModes)),
             const SizedBox(height: AppSpacing.md),
-            const Text(
-              'FolkTool will verify the installer Authenticode signature and then request Windows Administrator (UAC) permission to install the driver.',
-            ),
+            Text(l10n.driverSignatureNotice),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Verify & Install'),
+            child: Text(l10n.verifyAndInstall),
           ),
         ],
       ),
@@ -74,23 +73,25 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
       SnackBar(
         content: Text(
           result.launched
-              ? '${l10n.installDriverSuccess} Reconnect your device or reboot Windows if needed.'
+              ? l10n.installDriverSuccessReconnect(l10n.installDriverSuccess)
               : (result.errorMessage ?? l10n.installDriverFailed('')),
         ),
-        backgroundColor:
-            result.launched ? semantic.success : Theme.of(context).colorScheme.error,
+        backgroundColor: result.launched
+            ? semantic.success
+            : Theme.of(context).colorScheme.error,
       ),
     );
   }
 
   Future<void> _openOfficialSamsungDriver() async {
+    final l10n = S.of(context);
     final uri = Uri.parse(DriverService.samsungDriver.officialUrl!);
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to open official Samsung page: $e')),
+          SnackBar(content: Text(l10n.unableOpenSamsungPage(e))),
         );
       }
     }
@@ -104,67 +105,78 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
       appBar: AppBar(
         title: Text(l10n.driverInstallPage),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 840),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildDriverStatusAndTroubleshooting(context),
-                const SizedBox(height: 16),
-                _buildSamsungDriverCard(context),
-                const SizedBox(height: 14),
-                _buildDriverCard(
-                  driver: DriverService.drivers[0],
-                  title: l10n.qualcommDriver64,
-                  description: l10n.qualcommDriver64Desc,
-                  color: Colors.blue,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxWidth < 560;
+          final pad = isCompact ? 14.0 : 20.0;
+
+          return SingleChildScrollView(
+            padding: EdgeInsets.all(pad),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildDriverStatusAndTroubleshooting(context, l10n),
+                    const SizedBox(height: 16),
+                    _buildSamsungDriverCard(context, l10n),
+                    const SizedBox(height: 14),
+                    ResponsivePairGrid(
+                      breakpoint: 680,
+                      first: _buildDriverCard(
+                        driver: DriverService.drivers[0],
+                        title: l10n.qualcommDriver64,
+                        description: l10n.qualcommDriver64Desc,
+                        color: Colors.blue,
+                      ),
+                      second: _buildDriverCard(
+                        driver: DriverService.drivers[1],
+                        title: l10n.qualcommDriver32,
+                        description: l10n.qualcommDriver32Desc,
+                        color: context.semantic.success,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    ResponsivePairGrid(
+                      breakpoint: 680,
+                      first: _buildDriverCard(
+                        driver: DriverService.drivers[2],
+                        title: l10n.mediatekDriver,
+                        description: l10n.mediatekDriverDesc,
+                        color: Colors.purple,
+                      ),
+                      second: _buildDriverCard(
+                        driver: DriverService.drivers[3],
+                        title: l10n.oneplusAdbDriver,
+                        description: l10n.oneplusAdbDriverDesc,
+                        color: Colors.red,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    _buildDriverCard(
+                      driver: DriverService.drivers[4],
+                      title: l10n.oppoAdbDriver,
+                      description: l10n.oppoAdbDriverDesc,
+                      color: Colors.teal,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                _buildDriverCard(
-                  driver: DriverService.drivers[1],
-                  title: l10n.qualcommDriver32,
-                  description: l10n.qualcommDriver32Desc,
-                  color: context.semantic.success,
-                ),
-                const SizedBox(height: 14),
-                _buildDriverCard(
-                  driver: DriverService.drivers[2],
-                  title: l10n.mediatekDriver,
-                  description: l10n.mediatekDriverDesc,
-                  color: Colors.purple,
-                ),
-                const SizedBox(height: 14),
-                _buildDriverCard(
-                  driver: DriverService.drivers[3],
-                  title: l10n.oneplusAdbDriver,
-                  description: l10n.oneplusAdbDriverDesc,
-                  color: Colors.red,
-                ),
-                const SizedBox(height: 14),
-                _buildDriverCard(
-                  driver: DriverService.drivers[4],
-                  title: l10n.oppoAdbDriver,
-                  description: l10n.oppoAdbDriverDesc,
-                  color: Colors.teal,
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildDriverStatusAndTroubleshooting(BuildContext context) {
+  Widget _buildDriverStatusAndTroubleshooting(BuildContext context, S l10n) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final semantic = context.semantic;
-    final driverInstalled = context.select<DeviceProvider, bool>(
-      (p) => p.driverInstalled,
-    );
+    final deviceProvider = context.watch<DeviceProvider>();
+    final driverInstalled = deviceProvider.driverInstalled;
+    final diag = deviceProvider.toolchainDiagnostics;
 
     return Card(
       child: Padding(
@@ -184,25 +196,48 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                 Expanded(
                   child: Text(
                     driverInstalled
-                        ? 'ADB & Fastboot Tools Available'
-                        : 'ADB / Fastboot Tools Not Detected',
+                        ? l10n.toolsAvailableTitle
+                        : l10n.toolsMissingTitle,
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () => context.read<DeviceProvider>().checkDriver(),
+                  onPressed: () => deviceProvider.checkDriver(),
                   icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Re-check'),
+                  label: Text(l10n.recheck),
                 ),
               ],
             ),
+            if (diag != null) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 12,
+                runSpacing: 4,
+                children: [
+                  if (diag.adbVersion != null)
+                    Text(
+                      'ADB: ${diag.adbVersion}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  if (diag.fastbootVersion != null)
+                    Text(
+                      'Fastboot: ${diag.fastbootVersion}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: AppSpacing.sm),
             Text(
-              '• ADB Driver: Required when Android is booted with USB Debugging enabled.\n'
-              '• Fastboot Driver: Required in Bootloader mode. If Device Manager shows an unknown "Android" device with a yellow triangle, open Windows Update → Optional Updates → Driver Updates and install "Android Bootloader Interface".\n'
-              '• Administrator Permission: Driver installers require Windows UAC approval and Authenticode signature verification.',
+              l10n.driverHelpGuide,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
                 height: 1.45,
@@ -212,9 +247,12 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
               const SizedBox(height: AppSpacing.sm),
               Text(
                 _lastInstallResult!.launched
-                    ? 'Driver installer launched (Signature: ${_lastInstallResult!.signature?.status ?? 'Verified'}). Reconnect device or reboot Windows if needed.'
+                    ? l10n.driverLaunchedResult(
+                        _lastInstallResult!.signature?.status.name ??
+                            l10n.versionVerifiedBadge,
+                      )
                     : (_lastInstallResult!.errorMessage ??
-                        'Driver installation failed.'),
+                        l10n.installDriverFailed('')),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: _lastInstallResult!.launched
                       ? semantic.success
@@ -229,7 +267,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
     );
   }
 
-  Widget _buildSamsungDriverCard(BuildContext context) {
+  Widget _buildSamsungDriverCard(BuildContext context, S l10n) {
     final colorScheme = Theme.of(context).colorScheme;
     final samsung = DriverService.samsungDriver;
 
@@ -260,7 +298,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        samsung.name,
+                        l10n.samsungDriverName,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -268,7 +306,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${samsung.publisher} • ${samsung.supportedModes}',
+                        '${samsung.publisher} • ${l10n.samsungDriverModes}',
                         style: TextStyle(
                           fontSize: 12,
                           color: colorScheme.onSurfaceVariant,
@@ -281,7 +319,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Official Samsung USB Driver for Galaxy phones/tablets. Downloads directly from Samsung Developer Portal so you can verify the official Samsung digital signature before running with Administrator privileges.',
+              l10n.samsungDriverDesc,
               style: TextStyle(
                 fontSize: 12.5,
                 color: colorScheme.onSurfaceVariant,
@@ -294,7 +332,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
               child: FilledButton.tonalIcon(
                 onPressed: _openOfficialSamsungDriver,
                 icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('Download Official Samsung USB Driver'),
+                label: Text(l10n.downloadOfficialSamsungDriver),
               ),
             ),
           ],
@@ -343,7 +381,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                       Text(
                         title,
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 15.5,
                           fontWeight: FontWeight.w600,
                           color: colorScheme.onSurface,
                         ),
@@ -361,7 +399,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             if (isInstalled)
               Container(
                 padding: const EdgeInsets.all(12),
@@ -376,11 +414,13 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
                   children: [
                     Icon(Icons.check_circle, color: semantic.success, size: 18),
                     const SizedBox(width: 8),
-                    Text(
-                      l10n.installDriverSuccess,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: colorScheme.onSurface,
+                    Expanded(
+                      child: Text(
+                        l10n.installDriverSuccess,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: colorScheme.onSurface,
+                        ),
                       ),
                     ),
                   ],
