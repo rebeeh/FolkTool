@@ -65,7 +65,6 @@ UninstallDisplayName={#MyAppName}
 CloseApplications=yes
 CloseApplicationsFilter=FolkTool.exe,adb.exe,fastboot.exe,kptools.exe
 RestartApplications=no
-AppMutex=Local\FolkToolRunningMutex
 #ifdef EnableSigning
 SignedUninstaller=yes
 SignTool=folktool_sign
@@ -262,54 +261,63 @@ begin
   RemoveDir(DocsRoot); // Succeeds only if empty; preserves patched/ and backup/.
 end;
 
+function TryRemoveAppSubDir(const DirNorm, Name: String; var ErrorDetail: String): Boolean;
+var
+  SubDirPath: String;
+begin
+  Result := True;
+  SubDirPath := DirNorm + '\' + Name;
+  if DirExists(SubDirPath) then
+  begin
+    if not DelTree(SubDirPath, True, True, True) then
+    begin
+      Result := False;
+      ErrorDetail := SubDirPath;
+    end;
+  end;
+end;
+
+function TryRemoveAppRootFile(const DirNorm, Name: String; var ErrorDetail: String): Boolean;
+var
+  RootFilePath: String;
+begin
+  Result := True;
+  RootFilePath := DirNorm + '\' + Name;
+  if FileExists(RootFilePath) then
+  begin
+    if not DeleteFile(RootFilePath) then
+    begin
+      Result := False;
+      ErrorDetail := RootFilePath;
+    end;
+  end;
+end;
+
 function RemoveAppOwnedFilesForCleanInstall(const TargetDir: String; var ErrorDetail: String): Boolean;
 var
-  DirNorm, SubDirPath, RootFilePath: String;
-  SubDirs, RootFiles: array of String;
-  I: Integer;
+  DirNorm: String;
 begin
   Result := True;
   ErrorDetail := '';
   DirNorm := RemoveBackslashUnlessRoot(TargetDir);
   if (DirNorm = '') or (not DirExists(DirNorm)) then Exit;
 
-  SubDirs := ['data', 'bin', 'apk', 'assets', 'kp_versions', 'redist'];
-  for I := 0 to GetArrayLength(SubDirs) - 1 do
+  if (not TryRemoveAppSubDir(DirNorm, 'data', ErrorDetail)) or
+     (not TryRemoveAppSubDir(DirNorm, 'bin', ErrorDetail)) or
+     (not TryRemoveAppSubDir(DirNorm, 'apk', ErrorDetail)) or
+     (not TryRemoveAppSubDir(DirNorm, 'assets', ErrorDetail)) or
+     (not TryRemoveAppSubDir(DirNorm, 'kp_versions', ErrorDetail)) or
+     (not TryRemoveAppSubDir(DirNorm, 'redist', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'FolkTool.exe', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'flutter_windows.dll', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'url_launcher_windows_plugin.dll', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'msvcp140.dll', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'vcruntime140.dll', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'vcruntime140_1.dll', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'icudtl.dat', ErrorDetail)) or
+     (not TryRemoveAppRootFile(DirNorm, 'BUILD_INFO.txt', ErrorDetail)) then
   begin
-    SubDirPath := DirNorm + '\' + SubDirs[I];
-    if DirExists(SubDirPath) then
-    begin
-      if not DelTree(SubDirPath, True, True, True) then
-      begin
-        Result := False;
-        ErrorDetail := SubDirPath;
-        Exit;
-      end;
-    end;
-  end;
-
-  RootFiles := [
-    'FolkTool.exe',
-    'flutter_windows.dll',
-    'url_launcher_windows_plugin.dll',
-    'msvcp140.dll',
-    'vcruntime140.dll',
-    'vcruntime140_1.dll',
-    'icudtl.dat',
-    'BUILD_INFO.txt'
-  ];
-  for I := 0 to GetArrayLength(RootFiles) - 1 do
-  begin
-    RootFilePath := DirNorm + '\' + RootFiles[I];
-    if FileExists(RootFilePath) then
-    begin
-      if not DeleteFile(RootFilePath) then
-      begin
-        Result := False;
-        ErrorDetail := RootFilePath;
-        Exit;
-      end;
-    end;
+    Result := False;
   end;
 end;
 
@@ -502,6 +510,31 @@ begin
         DownloadPage.Hide;
       end;
     end;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  TargetDir: String;
+begin
+  Result := '';
+  TargetDir := ExpandConstant('{app}');
+
+  if CheckForMutexes('Local\FolkToolRunningMutex') and (not WizardSilent) then
+  begin
+    if MsgBox(
+      'FolkTool is currently running.' + #13#10#13#10 +
+      'Setup needs to close FolkTool and any tools running from its install folder before continuing. Close FolkTool now?',
+      mbConfirmation, MB_YESNO) <> IDYES then
+    begin
+      Result := 'Installation cancelled because FolkTool is currently running.';
+      Exit;
+    end;
+  end;
+
+  if not StopAppScopedProcesses(TargetDir) then
+  begin
+    Result := 'FolkTool or one of its bundled tools in "' + TargetDir + '" is still running and could not be closed. Please close it and retry.';
   end;
 end;
 
