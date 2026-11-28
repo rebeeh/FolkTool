@@ -448,7 +448,7 @@ class MessageLookup extends MessageLookupByLibrary {
     "logCleanWorkDir": MessageLookupByLibrary.simpleMessage("Cleaning temporary files..."),
     "logCleanWorkDirFailed": m52,
     "logConsole": MessageLookupByLibrary.simpleMessage("Log Console"),
-    "logCopied": MessageLookupByLibrary.simpleMessage("Copied to ${path}"),
+    "logCopied": m53,
     "logCopyBoot": MessageLookupByLibrary.simpleMessage("Copying boot image..."),
     "logDeviceInFastboot": MessageLookupByLibrary.simpleMessage("Device is in fastboot mode"),
     "logDeviceNotFastboot": MessageLookupByLibrary.simpleMessage("Device not in fastboot mode"),
