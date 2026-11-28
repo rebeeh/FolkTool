@@ -46,7 +46,6 @@ $srcOffset = [BitConverter]::ToUInt32($bytes, $bestOff + 12)
 $srcPayload = New-Object byte[] $srcSize
 [Array]::Copy($bytes, $srcOffset, $srcPayload, 0, $srcSize)
 
-# Decode source image (256x256 PNG or BMP inside ICO)
 $ms = New-Object System.IO.MemoryStream(, $srcPayload)
 $srcBmp = $null
 try {
@@ -54,7 +53,6 @@ try {
   $srcBmp = New-Object System.Drawing.Bitmap($srcImg)
   $srcImg.Dispose()
 } catch {
-  # Fallback for raw DIB payloads inside ICO
   $ms.Dispose()
   $tmpIco = New-Object System.IO.MemoryStream(, $bytes)
   $icoObj = New-Object System.Drawing.Icon($tmpIco, 256, 256)
@@ -65,7 +63,7 @@ try {
   if ($ms) { $ms.Dispose() }
 }
 
-function ConvertTo-IcoDibFrame([System.Drawing.Bitmap]$bmp) {
+function New-IcoDibFrameBytes([System.Drawing.Bitmap]$bmp) {
   $w = $bmp.Width
   $h = $bmp.Height
   $xorBytes = New-Object byte[] ($w * $h * 4)
@@ -101,13 +99,14 @@ function ConvertTo-IcoDibFrame([System.Drawing.Bitmap]$bmp) {
   $bw.Write([int32]0)
   $bw.Write([uint32]0)
   $bw.Write([uint32]0)
-  $bw.Write($xorBytes)
-  $bw.Write($andBytes)
   $bw.Flush()
-  $res = $outMs.ToArray()
+  $outMs.Write($xorBytes, 0, $xorBytes.Length)
+  $outMs.Write($andBytes, 0, $andBytes.Length)
+  [byte[]]$res = $outMs.ToArray()
   $bw.Dispose()
   $outMs.Dispose()
-  return $res
+  # Unary comma keeps byte[] intact without PowerShell pipeline unrolling into Object[].
+  return ,$res
 }
 
 $targetSizes = @(16, 24, 32, 48, 64, 128, 256)
@@ -124,13 +123,14 @@ foreach ($sz in $targetSizes) {
   $g.DrawImage($srcBmp, 0, 0, $sz, $sz)
   $g.Dispose()
 
+  [byte[]]$payload = $null
   if ($sz -eq 256) {
     $pngMs = New-Object System.IO.MemoryStream
     $resized.Save($pngMs, [System.Drawing.Imaging.ImageFormat]::Png)
     $payload = $pngMs.ToArray()
     $pngMs.Dispose()
   } else {
-    $payload = ConvertTo-IcoDibFrame $resized
+    $payload = New-IcoDibFrameBytes $resized
   }
   $resized.Dispose()
   $frames += [PSCustomObject]@{ Size = $sz; Payload = $payload }
@@ -157,12 +157,24 @@ foreach ($frame in $frames) {
   $writer.Write([uint32]$offset)
   $offset += $frame.Payload.Length
 }
-foreach ($frame in $frames) {
-  $writer.Write($frame.Payload)
-}
 $writer.Flush()
-[IO.File]::WriteAllBytes($fullPath, $outStream.ToArray())
+foreach ($frame in $frames) {
+  [byte[]]$buf = $frame.Payload
+  $outStream.Write($buf, 0, $buf.Length)
+}
+[byte[]]$finalBytes = $outStream.ToArray()
+[IO.File]::WriteAllBytes($fullPath, $finalBytes)
 $writer.Dispose()
 $outStream.Dispose()
 
-Write-Host "Generated multi-resolution icon at $IconPath ($($targetSizes -join ', '), $([IO.FileInfo]::new($fullPath).Length) bytes)."
+# Sanity-check every frame header (BITMAPINFOHEADER=40 or PNG signature).
+for ($i = 0; $i -lt $frames.Count; $i++) {
+  $dirOff = 6 + ($i * 16)
+  $imgOff = [BitConverter]::ToUInt32($finalBytes, $dirOff + 12)
+  $magic = [BitConverter]::ToUInt32($finalBytes, $imgOff)
+  if ($magic -ne 40 -and $magic -ne 0x474E5089) {
+    throw "Generated ICO frame $i has invalid magic header 0x$($magic.ToString('X8')) at offset $imgOff"
+  }
+}
+
+Write-Host "Generated multi-resolution icon at $IconPath ($($targetSizes -join ', '), $($finalBytes.Length) bytes)."
