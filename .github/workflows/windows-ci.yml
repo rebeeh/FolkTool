@@ -445,7 +445,8 @@ jobs:
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) { throw "Clean install deleted user boot/backup files!" }
 
           Write-Host "=== 5. Uninstall preserving user data ==="
-          $pUnins1 = Start-Process -FilePath $uninsExe1 -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait -PassThru
+          $uninstLog1 = (Join-Path $PWD "artifacts\uninstall-smoke.log")
+          $pUnins1 = Start-Process -FilePath $uninsExe1 -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$uninstLog1`"" -Wait -PassThru
           if ($pUnins1.ExitCode -ne 0) { throw "Uninstall failed with $($pUnins1.ExitCode)" }
           Start-Sleep -Seconds 2
           if (Test-Path (Join-Path $customDir "FolkTool.exe")) { throw "FolkTool.exe still exists after uninstall!" }
@@ -478,8 +479,11 @@ jobs:
           Write-Host "All Windows installer lifecycle smoke checks passed cleanly."
           } catch {
             Write-Host "::error::$($_.Exception.Message)"
-            if (Test-Path "artifacts\install-smoke.log") {
-              Get-Content "artifacts\install-smoke.log" | Select-Object -Last 60 | Write-Host
+            foreach ($diagFile in @("artifacts\uninstall-smoke.log", "artifacts\install-smoke.log")) {
+              if (Test-Path $diagFile) {
+                $tailLines = (Get-Content $diagFile | Select-Object -Last 40) -join " | "
+                Write-Host "::error::${diagFile}: $tailLines"
+              }
             }
             throw
           }
