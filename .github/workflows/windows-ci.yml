@@ -40,6 +40,16 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Verify EN/ZH localization parity and zero hardcoded UI strings
+        shell: pwsh
+        run: |
+          python scripts/sync_l10n.py --verify-only
+
+      - name: Materialize and verify official Platform-Tools, APatch, FolkPatch & KernelPatch toolchain
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts\fetch_verified_toolchain.ps1"
+
       - name: Static analysis
         shell: pwsh
         run: |
@@ -71,14 +81,18 @@ jobs:
       - name: Extract app version and release gate mode
         shell: pwsh
         run: |
-          $line = Select-String -Path "pubspec.yaml" -Pattern "^version:\s*([0-9]+\.[0-9]+\.[0-9]+)" | Select-Object -First 1
+          $line = Select-String -Path "pubspec.yaml" -Pattern "^version:\s*([0-9]+\.[0-9]+\.[0-9]+)(?:\+([0-9]+))?" | Select-Object -First 1
           if (-not $line) { throw "Could not parse version from pubspec.yaml" }
           $appVersion = $line.Matches.Groups[1].Value
+          $appBuild = if ($line.Matches.Groups[2].Success) { $line.Matches.Groups[2].Value } else { "0" }
+          $appNumeric = "$appVersion.$appBuild"
           $isTagRelease = "${{ github.ref }}".StartsWith("refs/tags/v")
           $requireSigning = ($isTagRelease -or "${{ inputs.require_signing }}" -eq "true").ToString().ToLowerInvariant()
           "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_BUILD_NUMBER=$appBuild" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_NUMERIC_VERSION=$appNumeric" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "REQUIRE_SIGNING=$requireSigning" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Using APP_VERSION=$appVersion, REQUIRE_SIGNING=$requireSigning"
+          Write-Host "Using APP_VERSION=$appVersion, APP_BUILD_NUMBER=$appBuild, APP_NUMERIC_VERSION=$appNumeric, REQUIRE_SIGNING=$requireSigning"
 
       - name: Ensure multi-resolution Windows icon (16, 24, 32, 48, 64, 128, 256)
         shell: pwsh
@@ -88,7 +102,11 @@ jobs:
       - name: Build Windows Release
         shell: pwsh
         run: |
-          $out = flutter build windows --release --dart-define=APP_VERSION=${{ env.APP_VERSION }} 2>&1 | Out-String
+          $out = flutter build windows --release `
+            --build-name="$env:APP_VERSION" `
+            --build-number="$env:APP_BUILD_NUMBER" `
+            --dart-define="APP_VERSION=$env:APP_VERSION" `
+            --dart-define="APP_BUILD_NUMBER=$env:APP_BUILD_NUMBER" 2>&1 | Out-String
           Write-Host $out
           if ($LASTEXITCODE -ne 0) {
             foreach ($line in ($out -split "`r?`n")) {
@@ -99,7 +117,7 @@ jobs:
             exit 1
           }
 
-      - name: Verify PE architecture, manifest, icon resources & CRT dependencies
+      - name: Verify PE architecture, version metadata, manifest, icon resources & CRT dependencies
         shell: pwsh
         run: |
           $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -120,8 +138,7 @@ jobs:
             & $dumpbin /dependents "build\windows\x64\runner\Release\flutter_windows.dll"
           }
 
-          $verInfo = (Get-Item $exe).VersionInfo
-          Write-Host "FileVersionInfo: Product=$($verInfo.ProductName) | Company=$($verInfo.CompanyName) | Desc=$($verInfo.FileDescription) | Ver=$($verInfo.ProductVersion)"
+          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $exe -ExpectedVersion $env:APP_NUMERIC_VERSION -CheckStringVersion
           & pwsh -NoProfile -File "scripts\verify_pe_icon.ps1" -BinaryPath $exe
 
       - name: Verify VC++ Redistributable download URL
@@ -284,6 +301,8 @@ jobs:
           $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
           $isccArgs = @(
             "/DMyAppVersion=$env:APP_VERSION",
+            "/DMyAppBuildNumber=$env:APP_BUILD_NUMBER",
+            "/DMyAppNumericVersion=$env:APP_NUMERIC_VERSION",
             "/DMyAppRepoUrl=$repoUrl"
           )
 
@@ -312,6 +331,7 @@ jobs:
 
           $setupExe = "installer\FolkTool-Setup.exe"
           if (-not (Test-Path $setupExe)) { throw "Expected output $setupExe not found" }
+          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $setupExe -ExpectedVersion $env:APP_NUMERIC_VERSION
           & pwsh -NoProfile -File "scripts\verify_pe_icon.ps1" -BinaryPath $setupExe
 
           if ($env:IS_SIGNED -eq "true") {
@@ -331,10 +351,11 @@ jobs:
 
           function Assert-InstalledFiles([string]$Dir) {
             foreach ($rel in @(
-              "FolkTool.exe", "flutter_windows.dll", "url_launcher_windows_plugin.dll", "unins000.exe",
-              "bin\kptools.exe", "bin\adb.exe", "bin\fastboot.exe", "bin\msys-2.0.dll",
-              "apk\APatch.apk", "apk\FolkPatch.apk", "assets\kpimg",
-              "kp_versions\folkpatch\kpimg", "kp_versions\apatch\kpimg"
+              "FolkTool.exe", "flutter_windows.dll", "url_launcher_windows_plugin.dll", "unins000.exe", "unins000.dat",
+              "bin\kptools.exe", "bin\adb.exe", "bin\fastboot.exe", "bin\msys-2.0.dll", "bin\platform-tools.source.properties",
+              "apk\APatch.apk", "apk\FolkPatch.apk", "assets\kpimg", "assets\manifests\toolchain_manifest.json",
+              "kp_versions\folkpatch\kpimg", "kp_versions\apatch\kpimg",
+              "kp_versions\folkpatch\115404_kp0.13.9\kpimg", "kp_versions\apatch\11282_kp0.13.9\kpimg"
             )) {
               $p = Join-Path $Dir $rel
               if (-not (Test-Path $p)) { throw "Missing installed file: $p" }
@@ -390,6 +411,8 @@ jobs:
           Assert-InstalledFiles $customDir
 
           $uninsExe1 = Join-Path $customDir "unins000.exe"
+          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath (Join-Path $customDir "FolkTool.exe") -ExpectedVersion $env:APP_NUMERIC_VERSION -CheckStringVersion
+          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $uninsExe1 -ExpectedVersion $env:APP_NUMERIC_VERSION
           & "$PWD\scripts\verify_pe_icon.ps1" -BinaryPath $uninsExe1
           if ($env:IS_SIGNED -eq "true") {
             & "$PWD\scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
@@ -400,10 +423,18 @@ jobs:
           $regPath = "HKLM:\$appIdKey"
           if (-not (Test-Path $regPath)) { throw "Uninstall registry entry missing at $regPath" }
           $regProps = Get-ItemProperty $regPath
-          Write-Host "Uninstall Reg: DisplayName=$($regProps.DisplayName) | Ver=$($regProps.DisplayVersion) | DisplayIcon=$($regProps.DisplayIcon)"
+          Write-Host "Uninstall Reg: DisplayName=$($regProps.DisplayName) | Ver=$($regProps.DisplayVersion) | Uninst=$($regProps.UninstallString)"
           if ($regProps.DisplayName -ne "FolkTool") { throw "Unexpected DisplayName: $($regProps.DisplayName)" }
+          if ($regProps.DisplayVersion -ne $env:APP_VERSION) { throw "DisplayVersion mismatch: $($regProps.DisplayVersion) != $env:APP_VERSION" }
+          if (-not $regProps.UninstallString -or -not ($regProps.UninstallString -match 'unins000\.exe')) {
+            throw "Malformed UninstallString: $($regProps.UninstallString)"
+          }
+          $parsedUninstPath = if ($regProps.UninstallString -match '^"([^"]+)"') { $Matches[1] } else { ($regProps.UninstallString -split '\s+')[0] }
+          if (-not (Test-Path -LiteralPath $parsedUninstPath)) {
+            throw "UninstallString points to missing uninstaller: $parsedUninstPath"
+          }
 
-          Write-Host "=== 2. Seed simulated user settings, patched output, backup & logs ==="
+          Write-Host "=== 2. Seed simulated user settings, patched output, backup & logs + broken orphan entry ==="
           New-Item -ItemType Directory -Force -Path (Join-Path $appDataRoot "FolkTool") | Out-Null
           '{"flutter.settings_confirm_flash":true}' | Out-File -FilePath (Join-Path $appDataRoot "FolkTool\shared_preferences.json") -Encoding utf8
           foreach ($sub in @("patched", "backup", "logs")) {
@@ -416,13 +447,21 @@ jobs:
           "STOCK_BACKUP" | Out-File -FilePath $userBackup -Encoding utf8
           "DIAG_LOG" | Out-File -FilePath $userLog -Encoding utf8
 
-          Write-Host "=== 3. Repair / upgrade simulation (restore deleted DLL & preserve user data) ==="
+          # Seed stale FolkTool_is1 HKCU key pointing to a non-existent uninstaller to verify automatic orphan pruning.
+          $staleKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FolkTool_is1"
+          New-Item -Path $staleKey -Force | Out-Null
+          Set-ItemProperty -Path $staleKey -Name "DisplayName" -Value "FolkTool 1.7.0"
+          Set-ItemProperty -Path $staleKey -Name "UninstallString" -Value '"C:\NonExistent\FolkTool\unins000.exe"'
+
+          Write-Host "=== 3. Repair / corrupted uninstaller recovery (restore deleted DLL & missing unins000.dat) ==="
           Remove-Item (Join-Path $customDir "url_launcher_windows_plugin.dll") -Force
+          Remove-Item (Join-Path $customDir "unins000.dat") -Force
           $pRepair = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
             -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /DIR=`"$customDir`"" `
             -Wait -PassThru
           if ($pRepair.ExitCode -ne 0) { throw "Repair/upgrade failed with $($pRepair.ExitCode)" }
           Assert-InstalledFiles $customDir
+          if (Test-Path $staleKey) { throw "Stale broken uninstall entry was not pruned during repair!" }
           if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Settings were lost during upgrade/repair!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) { throw "User files were lost during upgrade/repair!" }
 
@@ -444,12 +483,20 @@ jobs:
           if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Clean install deleted settings unexpectedly without /PURGEAPPDATA!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) { throw "Clean install deleted user boot/backup files!" }
 
-          Write-Host "=== 5. Uninstall preserving user data ==="
+          Write-Host "=== 5. Uninstall with live bundled adb.exe daemon & FolkTool.exe running (preserving user data) ==="
+          & (Join-Path $customDir "bin\adb.exe") start-server
+          $runningBeforeUninst = Assert-AppLaunchesInWorkingArea (Join-Path $customDir "FolkTool.exe")
           $uninstLog1 = (Join-Path $PWD "artifacts\uninstall-smoke.log")
           $pUnins1 = Start-Process -FilePath $uninsExe1 -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$uninstLog1`"" -Wait -PassThru
           if ($pUnins1.ExitCode -ne 0) { throw "Uninstall failed with $($pUnins1.ExitCode)" }
           Start-Sleep -Seconds 2
+          $runningBeforeUninst.Refresh()
+          if (-not $runningBeforeUninst.HasExited) {
+            Stop-Process -Id $runningBeforeUninst.Id -Force -ErrorAction SilentlyContinue
+            throw "Uninstaller failed to terminate running FolkTool.exe!"
+          }
           if (Test-Path (Join-Path $customDir "FolkTool.exe")) { throw "FolkTool.exe still exists after uninstall!" }
+          if (Test-Path (Join-Path $customDir "bin\adb.exe")) { throw "bin\adb.exe remained locked after uninstall!" }
           if (Test-Path $regPath) { throw "Uninstall registry key still exists!" }
           if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Standard uninstall deleted settings!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup) -or -not (Test-Path $userLog)) {
