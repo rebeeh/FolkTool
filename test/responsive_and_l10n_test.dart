@@ -38,6 +38,7 @@ Widget _buildShellApp({
   Locale locale = const Locale('en'),
   ThemeMode themeMode = ThemeMode.light,
   double textScale = 1.0,
+  VersionProvider? versionProvider,
 }) {
   final deviceService = DeviceService(
     processRunner: _IdleProcessRunner(),
@@ -45,6 +46,7 @@ Widget _buildShellApp({
   );
 
   return MultiProvider(
+    key: ValueKey('${locale.languageCode}_${themeMode.name}_$textScale'),
     providers: [
       ChangeNotifierProvider(
         create: (_) => DeviceProvider(deviceService: deviceService),
@@ -57,7 +59,9 @@ Widget _buildShellApp({
       ChangeNotifierProvider(
         create: (_) => ThemeProvider()..setThemeMode(themeMode),
       ),
-      ChangeNotifierProvider(create: (_) => VersionProvider()),
+      ChangeNotifierProvider(
+        create: (_) => versionProvider ?? VersionProvider(),
+      ),
     ],
     child: Consumer2<LocaleProvider, ThemeProvider>(
       builder: (context, localeProv, themeProv, _) {
@@ -157,10 +161,23 @@ void main() {
       'settings_auto_monitor': false,
       'settings_check_updates': false,
     });
+    final zhVersionProvider = VersionProvider();
     tester.view.physicalSize = const Size(1390, 938);
     await tester.pumpWidget(
-      _buildShellApp(locale: const Locale('zh'), themeMode: ThemeMode.dark),
+      _buildShellApp(
+        locale: const Locale('zh'),
+        themeMode: ThemeMode.dark,
+        versionProvider: zhVersionProvider,
+      ),
     );
+    await tester.pump();
+    for (var i = 0; i < 40 && zhVersionProvider.isLoading; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 25)),
+      );
+      await tester.pump();
+    }
+    expect(zhVersionProvider.isLoading, isFalse);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 

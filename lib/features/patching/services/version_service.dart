@@ -33,32 +33,32 @@ class TargetToolchainSummary {
 
 class VersionService {
   Map<String, dynamic>? _cachedManifest;
+  Future<Map<String, dynamic>?>? _manifestFuture;
 
-  Future<Map<String, dynamic>?> loadManifest() async {
-    if (_cachedManifest != null) return _cachedManifest;
+  Future<Map<String, dynamic>?> loadManifest() {
+    if (_cachedManifest != null) return Future.value(_cachedManifest);
+    return _manifestFuture ??= _loadManifestUncached().whenComplete(() {
+      _manifestFuture = null;
+    });
+  }
 
-    // Try bundled asset first (works in release & widget tests with AssetBundle).
-    try {
-      final raw = await rootBundle.loadString(AppConfig.toolchainManifestAsset);
-      final parsed = jsonDecode(raw);
-      if (parsed is Map<String, dynamic>) {
-        _cachedManifest = parsed;
-        return parsed;
-      }
-    } catch (_) {
-      // Headless pure Dart unit tests may run before rootBundle is bound.
-    }
-
-    // Fallback to direct disk read relative to executable/project root.
+  Future<Map<String, dynamic>?> _loadManifestUncached() async {
+    // Check adjacent/project/flutter_assets manifest files first so both pure
+    // Dart tests and widget tests resolve deterministically without stalling on
+    // platform binary-messenger asset loads.
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
     final diskCandidates = <String>[
       p.join(
-        File(Platform.resolvedExecutable).parent.path,
+        Directory(AppConfig.kpVersionsBasePath).parent.path,
         'assets',
         'manifests',
         'toolchain_manifest.json',
       ),
+      p.join(exeDir, 'assets', 'manifests', 'toolchain_manifest.json'),
       p.join(
-        Directory(AppConfig.kpVersionsBasePath).parent.path,
+        exeDir,
+        'data',
+        'flutter_assets',
         'assets',
         'manifests',
         'toolchain_manifest.json',
@@ -79,6 +79,22 @@ class VersionService {
         debugPrint('[VersionService] Manifest read skipped ($candidate): $e');
       }
     }
+
+    // Fallback to Flutter asset bundle (packaged builds where assets live only
+    // in the compiled bundle).
+    try {
+      final raw = await rootBundle
+          .loadString(AppConfig.toolchainManifestAsset)
+          .timeout(const Duration(seconds: 3));
+      final parsed = jsonDecode(raw);
+      if (parsed is Map<String, dynamic>) {
+        _cachedManifest = parsed;
+        return parsed;
+      }
+    } catch (_) {
+      // Headless or unbundled environments fall back cleanly to local slots.
+    }
+
     return null;
   }
 

@@ -43,7 +43,8 @@ class _SimplePatchScreenState extends State<SimplePatchScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<VersionProvider>().loadVersions();
+      if (!mounted) return;
+      context.read<VersionProvider>().ensureLoaded();
     });
   }
 

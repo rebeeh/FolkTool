@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 
 /// Persists user preferences for monitoring, safety confirmations, and diagnostics.
-class SettingsProvider extends ChangeNotifier {
+class SettingsProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   static const String _autoMonitorKey = 'settings_auto_monitor';
   static const String _confirmFlashKey = 'settings_confirm_flash';
   static const String _redactDiagKey = 'settings_redact_diagnostics';
@@ -12,6 +13,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _confirmBeforeFlash = true;
   bool _redactDiagnostics = true;
   bool _checkUpdatesOnLaunch = true;
+  Future<void>? _loadFuture;
 
   bool get autoMonitorDevices => _autoMonitorDevices;
   bool get confirmBeforeFlash => _confirmBeforeFlash;
@@ -19,8 +21,10 @@ class SettingsProvider extends ChangeNotifier {
   bool get checkUpdatesOnLaunch => _checkUpdatesOnLaunch;
 
   SettingsProvider() {
-    _load();
+    ensureLoaded();
   }
+
+  Future<void> ensureLoaded() => _loadFuture ??= _load();
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();

@@ -59,7 +59,9 @@ class _AppShellScreenState extends State<AppShellScreen> {
   @override
   void initState() {
     super.initState();
-    _initData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _initData();
+    });
   }
 
   Future<void> _initData() async {
@@ -68,8 +70,9 @@ class _AppShellScreenState extends State<AppShellScreen> {
     final versionProvider = context.read<VersionProvider>();
 
     await Future.wait([
+      settingsProvider.ensureLoaded(),
       deviceProvider.checkDriver(),
-      versionProvider.loadVersions(),
+      versionProvider.ensureLoaded(),
     ]);
     if (!mounted) return;
 

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 
 /// Persists and exposes the user's selected [ThemeMode] (system, light, or dark).
-class ThemeProvider extends ChangeNotifier {
+class ThemeProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   static const String _themeModeKey = 'theme_mode';
 
   ThemeMode _themeMode = ThemeMode.system;

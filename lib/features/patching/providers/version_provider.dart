@@ -1,11 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/app_config.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 import '../models/kp_version.dart';
 import '../models/patch_target.dart';
 import '../services/version_service.dart';
 
-class VersionProvider extends ChangeNotifier {
+class VersionProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   final VersionService _versionService;
 
   VersionProvider({VersionService? versionService})
@@ -15,6 +16,7 @@ class VersionProvider extends ChangeNotifier {
   KpVersion? _selectedVersion;
   String? _customVersionPath;
   bool _isLoading = false;
+  bool _hasLoaded = false;
   bool _targetLoaded = false;
 
   PatchTarget _currentTarget = PatchTarget.folkpatch;
@@ -26,6 +28,7 @@ class VersionProvider extends ChangeNotifier {
   KpVersion? get selectedVersion => _selectedVersion;
   String? get customVersionPath => _customVersionPath;
   bool get isLoading => _isLoading;
+  bool get hasLoaded => _hasLoaded;
   TargetToolchainSummary? get currentTargetSummary =>
       _summaries[_currentTarget];
 
@@ -67,6 +70,11 @@ class VersionProvider extends ChangeNotifier {
   String _customPathPrefKey(PatchTarget target) =>
       '${AppConfig.customVersionPathKeyPrefix}${target.directoryName}';
 
+  Future<void> ensureLoaded() async {
+    if (_hasLoaded || _isLoading) return;
+    await loadVersions();
+  }
+
   Future<void> loadVersions({bool reloadSavedTarget = true}) async {
     _isLoading = true;
     notifyListeners();
@@ -98,6 +106,7 @@ class VersionProvider extends ChangeNotifier {
 
       await _loadSavedVersion();
     } finally {
+      _hasLoaded = true;
       _isLoading = false;
       notifyListeners();
     }

@@ -44,7 +44,8 @@ class _QuickPatchScreenState extends State<QuickPatchScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<VersionProvider>().loadVersions();
+      if (!mounted) return;
+      context.read<VersionProvider>().ensureLoaded();
     });
   }
 

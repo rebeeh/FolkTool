@@ -4,6 +4,7 @@ import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_error.dart';
 import '../../../core/l10n/l10n_helper.dart';
 import '../../../core/logging/log_entry.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 import '../../device/models/device_info.dart';
 import '../../device/providers/device_provider.dart';
 import '../../device/services/device_service.dart';
@@ -15,7 +16,7 @@ import 'version_provider.dart';
 
 enum PatchOperationState { idle, running, completed, failed, cancelled }
 
-class PatchProvider extends ChangeNotifier {
+class PatchProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   final KpToolsService _kptoolsService;
   final FileService _fileService;
   final SafetyService _safetyService;

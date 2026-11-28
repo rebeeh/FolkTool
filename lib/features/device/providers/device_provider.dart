@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/l10n/l10n_helper.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 import '../models/device_info.dart';
 import '../services/device_service.dart';
 
@@ -59,7 +60,7 @@ class _CachedDeviceProps {
   });
 }
 
-class DeviceProvider extends ChangeNotifier {
+class DeviceProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   final DeviceService _deviceService;
 
   DeviceProvider({DeviceService? deviceService})

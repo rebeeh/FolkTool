@@ -586,10 +586,12 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: theme.colorScheme.primary),
         const SizedBox(width: AppSpacing.sm),
-        Text(
-          title,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
+        Expanded(
+          child: Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
