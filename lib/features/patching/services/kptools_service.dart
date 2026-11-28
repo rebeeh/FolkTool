@@ -1,10 +1,11 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../../../core/config/app_config.dart';
+import '../../../core/l10n/l10n_helper.dart';
 import '../../../core/process/process_runner.dart';
-import '../../../generated/l10n.dart';
 import '../models/kp_version.dart';
 import '../models/patch_result.dart';
+import '../models/patch_target.dart';
 
 typedef PatchLogCallback = void Function(String line);
 
@@ -15,6 +16,17 @@ class KpToolsService {
       : _processRunner = processRunner ??
             const DefaultProcessRunner(timeout: Duration(seconds: 60));
 
+  Future<String> _resolveKptoolsExecutable(KpVersion? kpVersion) async {
+    final preferred = kpVersion?.kptoolsPath ??
+        AppConfig.kptoolsPathForSource(
+          (kpVersion?.source ?? PatchTarget.folkpatch).directoryName,
+        );
+    if (await File(preferred).exists()) {
+      return preferred;
+    }
+    return AppConfig.kptoolsPath;
+  }
+
   Future<PatchResult> patchBootImage({
     required String inputPath,
     required String outputPath,
@@ -23,50 +35,53 @@ class KpToolsService {
     PatchLogCallback? onLog,
   }) async {
     final logs = <String>[];
+    final l10n = appL10n;
 
     try {
       final kpimgPath = kpVersion?.kpimgPath ?? _getKpimgPath();
+      final kptoolsPath = await _resolveKptoolsExecutable(kpVersion);
 
-      onLog?.call(S.current.logCheckingFile);
-      onLog?.call(S.current.logInputFile(inputPath));
-      onLog?.call(S.current.logOutputFile(outputPath));
-      onLog?.call(S.current.logKpimgPath(kpimgPath));
-      onLog?.call(S.current.logKptoolsPath(AppConfig.kptoolsPath));
+      onLog?.call(l10n.logCheckingFile);
+      onLog?.call(l10n.logInputFile(inputPath));
+      onLog?.call(l10n.logOutputFile(outputPath));
+      onLog?.call(l10n.logKpimgPath(kpimgPath));
+      onLog?.call(l10n.logKptoolsPath(kptoolsPath));
 
       if (!await File(inputPath).exists()) {
         return PatchResult.failure(
-          S.current.errInputNotExist(inputPath),
+          l10n.errInputNotExist(inputPath),
           logs: logs,
         );
       }
 
       if (!await File(kpimgPath).exists()) {
         return PatchResult.failure(
-          S.current.errKpimgNotExist(kpimgPath),
+          l10n.errKpimgNotExist(kpimgPath),
           logs: logs,
         );
       }
 
-      if (!await File(AppConfig.kptoolsPath).exists()) {
+      if (!await File(kptoolsPath).exists()) {
         return PatchResult.failure(
-          S.current.errKptoolsNotExist(AppConfig.kptoolsPath),
+          l10n.errKptoolsNotExist(kptoolsPath),
           logs: logs,
         );
       }
 
       final workDir = await Directory.systemTemp.createTemp('folkpatch_');
-      onLog?.call(S.current.logWorkDir(workDir.path));
+      onLog?.call(l10n.logWorkDir(workDir.path));
 
       try {
-        onLog?.call(S.current.logCopyBoot);
+        onLog?.call(l10n.logCopyBoot);
         final bootImgName = p.basename(inputPath);
         final workBootImg = p.join(workDir.path, bootImgName);
         await File(inputPath).copy(workBootImg);
-        onLog?.call(S.current.logCopied(workBootImg));
+        onLog?.call(l10n.logCopied(workBootImg));
 
-        onLog?.call(S.current.logUnpacking);
+        onLog?.call(l10n.logUnpacking);
         final unpackResult = await _runKptools(
           ['unpack', workBootImg],
+          executablePath: kptoolsPath,
           workDir: workDir.path,
           onLog: (line) {
             logs.add(line);
@@ -76,7 +91,7 @@ class KpToolsService {
 
         if (unpackResult.exitCode != 0) {
           return PatchResult.failure(
-            S.current.errUnpackFailed(unpackResult.stderr),
+            l10n.errUnpackFailed(unpackResult.stderr),
             logs: logs,
           );
         }
@@ -84,17 +99,17 @@ class KpToolsService {
         final kernelPath = p.join(workDir.path, 'kernel');
         if (!await File(kernelPath).exists()) {
           return PatchResult.failure(
-            S.current.errKernelNotFound,
+            l10n.errKernelNotFound,
             logs: logs,
           );
         }
-        onLog?.call(S.current.logUnpackSuccess(kernelPath));
+        onLog?.call(l10n.logUnpackSuccess(kernelPath));
 
         final kernelOriPath = p.join(workDir.path, 'kernel.ori');
         await File(kernelPath).copy(kernelOriPath);
-        onLog?.call(S.current.logBackupKernel);
+        onLog?.call(l10n.logBackupKernel);
 
-        onLog?.call(S.current.logPatchingKernel);
+        onLog?.call(l10n.logPatchingKernel);
         final patchArgs = [
           '-p',
           '-i',
@@ -111,7 +126,7 @@ class KpToolsService {
           final workModulePath = p.join(workDir.path, fileName);
           await File(module).copy(workModulePath);
           kpmPaths.add(fileName);
-          onLog?.call(S.current.logKpmModule(module));
+          onLog?.call(l10n.logKpmModule(module));
         }
 
         for (final kpmPath in kpmPaths) {
@@ -120,6 +135,7 @@ class KpToolsService {
 
         final patchResult = await _runKptools(
           patchArgs,
+          executablePath: kptoolsPath,
           workDir: workDir.path,
           onLog: (line) {
             logs.add(line);
@@ -129,22 +145,23 @@ class KpToolsService {
 
         if (patchResult.exitCode != 0) {
           return PatchResult.failure(
-            S.current.errPatchFailed(patchResult.stderr),
+            l10n.errPatchFailed(patchResult.stderr),
             logs: logs,
           );
         }
 
         if (!await File(kernelPath).exists()) {
           return PatchResult.failure(
-            S.current.errOutputKernelNotFound,
+            l10n.errOutputKernelNotFound,
             logs: logs,
           );
         }
-        onLog?.call(S.current.logPatchSuccess);
+        onLog?.call(l10n.logPatchSuccess);
 
-        onLog?.call(S.current.logRepacking);
+        onLog?.call(l10n.logRepacking);
         await _runKptools(
           ['repack', workBootImg],
+          executablePath: kptoolsPath,
           workDir: workDir.path,
           onLog: (line) {
             logs.add(line);
@@ -158,7 +175,7 @@ class KpToolsService {
           await File(newBootPath).copy(outputPath);
           final size = await File(outputPath).length();
           onLog?.call(
-            S.current.logRepackSuccess(
+            l10n.logRepackSuccess(
               outputPath,
               (size / 1024 / 1024).toStringAsFixed(2),
             ),
@@ -166,21 +183,21 @@ class KpToolsService {
           return PatchResult.success(outputPath, logs: logs);
         } else {
           return PatchResult.failure(
-            S.current.errRepackFailed,
+            l10n.errRepackFailed,
             logs: logs,
           );
         }
       } finally {
         try {
           await workDir.delete(recursive: true);
-          onLog?.call(S.current.logCleanWorkDir);
+          onLog?.call(l10n.logCleanWorkDir);
         } catch (e) {
-          onLog?.call(S.current.logCleanWorkDirFailed(e));
+          onLog?.call(l10n.logCleanWorkDirFailed(e));
         }
       }
     } catch (e) {
       return PatchResult.failure(
-        S.current.errPatchException(e),
+        l10n.errPatchException(e),
         logs: logs,
       );
     }
@@ -192,6 +209,7 @@ class KpToolsService {
     PatchLogCallback? onLog,
   }) async {
     final logs = <String>[];
+    final l10n = appL10n;
 
     try {
       final result = await _runKptools(
@@ -206,12 +224,12 @@ class KpToolsService {
         return PatchResult.success(outputPath, logs: logs);
       } else {
         return PatchResult.failure(
-          S.current.errPatchFailed(result.stderr),
+          l10n.errPatchFailed(result.stderr),
           logs: logs,
         );
       }
     } catch (e) {
-      return PatchResult.failure(S.current.errPatchException(e), logs: logs);
+      return PatchResult.failure(l10n.errPatchException(e), logs: logs);
     }
   }
 
@@ -231,7 +249,7 @@ class KpToolsService {
       }
       return null;
     } catch (e) {
-      onLog?.call(S.current.logUnpackException(e));
+      onLog?.call(appL10n.logUnpackException(e));
       return null;
     }
   }
@@ -252,7 +270,7 @@ class KpToolsService {
       }
       return null;
     } catch (e) {
-      onLog?.call(S.current.logRepackException(e));
+      onLog?.call(appL10n.logRepackException(e));
       return null;
     }
   }
@@ -266,7 +284,7 @@ class KpToolsService {
           await _runKptools(['-l', '-i', inputPath], onLog: onLog);
       return result.stdout.toString();
     } catch (e) {
-      return S.current.logListPatchInfoFailed(e);
+      return appL10n.logListPatchInfoFailed(e);
     }
   }
 
@@ -278,12 +296,13 @@ class KpToolsService {
 
   Future<ProcessResult> _runKptools(
     List<String> args, {
+    String? executablePath,
     String? workDir,
     PatchLogCallback? onLog,
   }) async {
-    final executable = AppConfig.kptoolsPath;
+    final executable = executablePath ?? AppConfig.kptoolsPath;
 
-    onLog?.call(S.current.logExecuteCmd('kptools ${args.join(' ')}'));
+    onLog?.call(appL10n.logExecuteCmd('kptools ${args.join(' ')}'));
 
     final result = await _processRunner.run(
       executable,
