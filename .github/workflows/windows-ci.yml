@@ -321,6 +321,7 @@ jobs:
       - name: Smoke test install, upgrade/repair, running-app close, clean install, uninstall & reinstall
         shell: pwsh
         run: |
+          try {
           New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
           $appIdKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1"
           $docsRoot = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "FolkTool"
@@ -475,6 +476,13 @@ jobs:
           }
           Remove-Item -Recurse -Force $docsRoot -ErrorAction SilentlyContinue
           Write-Host "All Windows installer lifecycle smoke checks passed cleanly."
+          } catch {
+            Write-Host "::error::$($_.Exception.Message)"
+            if (Test-Path "artifacts\install-smoke.log") {
+              Get-Content "artifacts\install-smoke.log" | Select-Object -Last 60 | Write-Host
+            }
+            throw
+          }
 
       - name: Package Portable ZIP & Generate Checksums
         shell: pwsh
