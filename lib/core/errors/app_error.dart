@@ -1,3 +1,5 @@
+import '../l10n/l10n_helper.dart';
+
 /// Structured error categories for actionable user feedback and diagnostics.
 enum AppErrorCategory {
   deviceConnection,
@@ -55,35 +57,36 @@ class AppError implements Exception {
   }
 
   String get categoryName {
+    final l10n = appL10n;
     switch (category) {
       case AppErrorCategory.deviceConnection:
-        return 'Device Connection';
+        return l10n.errCatDeviceConnection;
       case AppErrorCategory.adb:
-        return 'ADB';
+        return l10n.errCatAdb;
       case AppErrorCategory.fastboot:
-        return 'Fastboot';
+        return l10n.errCatFastboot;
       case AppErrorCategory.driver:
-        return 'Driver';
+        return l10n.errCatDriver;
       case AppErrorCategory.file:
-        return 'File';
+        return l10n.errCatFile;
       case AppErrorCategory.imageValidation:
-        return 'Image Validation';
+        return l10n.errCatImageValidation;
       case AppErrorCategory.compatibility:
-        return 'Compatibility';
+        return l10n.errCatCompatibility;
       case AppErrorCategory.permission:
-        return 'Permission';
+        return l10n.errCatPermission;
       case AppErrorCategory.network:
-        return 'Network';
+        return l10n.errCatNetwork;
       case AppErrorCategory.download:
-        return 'Download';
+        return l10n.errCatDownload;
       case AppErrorCategory.extraction:
-        return 'Extraction';
+        return l10n.errCatExtraction;
       case AppErrorCategory.process:
-        return 'Process';
+        return l10n.errCatProcess;
       case AppErrorCategory.flashing:
-        return 'Flashing';
+        return l10n.errCatFlashing;
       case AppErrorCategory.application:
-        return 'Application';
+        return l10n.errCatApplication;
     }
   }
 
