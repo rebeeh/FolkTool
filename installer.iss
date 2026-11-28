@@ -69,14 +69,18 @@ UsePreviousPrivileges=yes
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 SetupIconFile=assets\icons\icon.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\{#MyAppExeName},0
 UninstallDisplayName={#MyAppName}
 CloseApplications=yes
 CloseApplicationsFilter=FolkTool.exe,adb.exe,fastboot.exe,kptools.exe
 RestartApplications=no
 #ifdef EnableSigning
 SignedUninstaller=yes
-SignTool=folktool_sign
+SignTool=folktool_sign $f
+SignToolRetryCount=3
+SignToolRetryDelay=2000
+SignToolMinimumTimeBetween=1000
+SignToolRunMinimized=yes
 #endif
 
 [Languages]
@@ -95,7 +99,7 @@ Source: "{#SourceDir}\FolkTool.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\url_launcher_windows_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "7za.exe"
 Source: "apk\*"; DestDir: "{app}\apk"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "assets\icons"
 Source: "kp_versions\*"; DestDir: "{app}\kp_versions"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -126,6 +130,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 [Code]
 const
   UninstallRegKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1';
+  LegacyUninstallRegKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\FolkTool_is1';
 
 var
   DownloadPage: TDownloadWizardPage;
@@ -134,6 +139,9 @@ var
   ExistingInstallFound: Boolean;
   ExistingInstallDir: String;
   ExistingInstallVer: String;
+
+function SetEnvironmentVariableW(const lpName, lpValue: String): Integer;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
 
 function HasCmdSwitch(const SwitchName: String): Boolean;
 var
@@ -152,38 +160,46 @@ begin
   end;
 end;
 
-function EscapePsSingleQuoted(const Value: String): String;
-begin
-  Result := Value;
-  StringChange(Result, '''', '''''');
-end;
-
-function QueryExistingInstallation(var VersionOut, DirOut: String): Boolean;
+function QueryExistingInstallationInKey(const SubKeyPath: String; var VersionOut, DirOut: String): Boolean;
 var
   Ver, Loc: String;
 begin
   Result := False;
+  if RegQueryStringValue(HKLM64, SubKeyPath, 'InstallLocation', Loc) or
+     RegQueryStringValue(HKLM64, SubKeyPath, 'Inno Setup: App Path', Loc) then
+  begin
+    Loc := RemoveBackslashUnlessRoot(Trim(Loc));
+    if (Loc <> '') and DirExists(Loc) then
+    begin
+      RegQueryStringValue(HKLM64, SubKeyPath, 'DisplayVersion', Ver);
+      VersionOut := Ver;
+      DirOut := Loc;
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  if RegQueryStringValue(HKCU, SubKeyPath, 'InstallLocation', Loc) or
+     RegQueryStringValue(HKCU, SubKeyPath, 'Inno Setup: App Path', Loc) then
+  begin
+    Loc := RemoveBackslashUnlessRoot(Trim(Loc));
+    if (Loc <> '') and DirExists(Loc) then
+    begin
+      RegQueryStringValue(HKCU, SubKeyPath, 'DisplayVersion', Ver);
+      VersionOut := Ver;
+      DirOut := Loc;
+      Result := True;
+    end;
+  end;
+end;
+
+function QueryExistingInstallation(var VersionOut, DirOut: String): Boolean;
+begin
   VersionOut := '';
   DirOut := '';
-
-  if RegQueryStringValue(HKLM64, UninstallRegKey, 'InstallLocation', Loc) or
-     RegQueryStringValue(HKLM64, UninstallRegKey, 'Inno Setup: App Path', Loc) then
-  begin
-    RegQueryStringValue(HKLM64, UninstallRegKey, 'DisplayVersion', Ver);
-    VersionOut := Ver;
-    DirOut := RemoveBackslashUnlessRoot(Loc);
-    Result := True;
-    Exit;
-  end;
-
-  if RegQueryStringValue(HKCU, UninstallRegKey, 'InstallLocation', Loc) or
-     RegQueryStringValue(HKCU, UninstallRegKey, 'Inno Setup: App Path', Loc) then
-  begin
-    RegQueryStringValue(HKCU, UninstallRegKey, 'DisplayVersion', Ver);
-    VersionOut := Ver;
-    DirOut := RemoveBackslashUnlessRoot(Loc);
-    Result := True;
-  end;
+  Result := QueryExistingInstallationInKey(UninstallRegKey, VersionOut, DirOut);
+  if not Result then
+    Result := QueryExistingInstallationInKey(LegacyUninstallRegKey, VersionOut, DirOut);
 end;
 
 function StopAppScopedProcesses(const AppDir: String): Boolean;
@@ -204,10 +220,11 @@ begin
   end;
 
   // Terminate only app/helper processes executing out of FolkTool's install directory,
-  // excluding the Inno Setup uninstaller stub itself and external system tools.
+  // passing the directory via environment variable to avoid shell-quoting or Unicode issues.
+  SetEnvironmentVariableW('FOLKTOOL_TARGET_DIR', NormalizedDir);
   PsCommand :=
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
-    '$dir = ''' + EscapePsSingleQuoted(NormalizedDir) + '''.TrimEnd(''\'') + ''\''; ' +
+    '$dir = ($env:FOLKTOOL_TARGET_DIR).TrimEnd(''\'') + ''\''; ' +
     '$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) -and ($_.Name -notlike ''unins*.exe'') }; ' +
     'foreach ($p in $procs) { try { $proc = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue; if ($proc) { $null = $proc.CloseMainWindow() } } catch {} }; ' +
     'Start-Sleep -Milliseconds 1500; ' +
@@ -219,6 +236,7 @@ begin
 
   if Exec('powershell.exe', PsCommand, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     Result := (ResultCode = 0);
+  SetEnvironmentVariableW('FOLKTOOL_TARGET_DIR', '');
 end;
 
 function ExtractUninstallerExePath(const RawCmd: String): String;
@@ -281,13 +299,19 @@ end;
 
 procedure RemoveAlternateScopeRegistrations;
 begin
-  // Prevent dual HKLM + HKCU Uninstall entries when switching between per-user and all-users installs.
+  // Prevent dual HKLM + HKCU Uninstall entries when switching between per-user and all-users installs,
+  // and remove superseded legacy pre-GUID FolkTool_is1 entries once upgraded.
   if IsAdminInstallMode then
   begin
     if RegKeyExists(HKCU, UninstallRegKey) then
     begin
       Log('Cleaning conflicting per-user HKCU uninstall key after all-users install.');
       RegDeleteKeyIncludingSubkeys(HKCU, UninstallRegKey);
+    end;
+    if RegKeyExists(HKLM64, LegacyUninstallRegKey) then
+    begin
+      Log('Removing superseded legacy HKLM FolkTool_is1 key after upgrade.');
+      RegDeleteKeyIncludingSubkeys(HKLM64, LegacyUninstallRegKey);
     end;
   end
   else
@@ -297,6 +321,11 @@ begin
       Log('Cleaning conflicting HKLM uninstall key after per-user install.');
       RegDeleteKeyIncludingSubkeys(HKLM64, UninstallRegKey);
     end;
+  end;
+  if RegKeyExists(HKCU, LegacyUninstallRegKey) then
+  begin
+    Log('Removing superseded legacy HKCU FolkTool_is1 key after upgrade.');
+    RegDeleteKeyIncludingSubkeys(HKCU, LegacyUninstallRegKey);
   end;
 end;
 
@@ -318,6 +347,34 @@ begin
     Result := DestFile;
 end;
 
+procedure CleanupOrphanedPatchTempDirs;
+var
+  TempRoot, CandidatePath: String;
+  FindRec: TFindRec;
+begin
+  TempRoot := RemoveBackslashUnlessRoot(Trim(GetEnv('TEMP')));
+  if (TempRoot = '') or (not DirExists(TempRoot)) then Exit;
+
+  if FindFirst(TempRoot + '\folkpatch_*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+          begin
+            CandidatePath := TempRoot + '\' + FindRec.Name;
+            Log('Cleaning orphaned FolkTool patch temp directory: ' + CandidatePath);
+            DelTree(CandidatePath, True, True, True);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
 procedure PurgeFolkToolAppData(const DeleteLogs: Boolean);
 var
   LogsDir, DocsRoot: String;
@@ -326,6 +383,7 @@ begin
   DelTree(ExpandConstant('{userappdata}\FolkTool'), True, True, True);
   DelTree(ExpandConstant('{localappdata}\FolkTool'), True, True, True);
   DelTree(ExpandConstant('{userdocs}\FolkTool\drivers'), True, True, True);
+  CleanupOrphanedPatchTempDirs;
 
   if DeleteLogs then
   begin
@@ -389,7 +447,51 @@ begin
   end;
 end;
 
-function RemoveAppOwnedFilesForCleanInstall(const TargetDir: String; var ErrorDetail: String): Boolean;
+function CanOpenExclusiveWrite(const FullPath: String): Boolean;
+var
+  Stream: TFileStream;
+begin
+  Result := True;
+  if not FileExists(FullPath) then Exit;
+  Stream := nil;
+  try
+    { $0012 = fmOpenReadWrite ($0002) or fmShareExclusive ($0010) }
+    Stream := TFileStream.Create(FullPath, $0012);
+    Stream.Free;
+  except
+    if Stream <> nil then
+      Stream.Free;
+    Result := False;
+  end;
+end;
+
+function CheckPathUnlocked(const FullPath: String; var ErrorDetail: String): Boolean;
+begin
+  Result := CanOpenExclusiveWrite(FullPath);
+  if not Result then
+    ErrorDetail := FullPath;
+end;
+
+function PreCheckCleanInstallUnlocked(const DirNorm: String; const IncludeUninstaller: Boolean; var ErrorDetail: String): Boolean;
+begin
+  Result := False;
+  if not CheckPathUnlocked(DirNorm + '\FolkTool.exe', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\flutter_windows.dll', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\url_launcher_windows_plugin.dll', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\bin\adb.exe', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\bin\fastboot.exe', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\bin\AdbWinApi.dll', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\bin\AdbWinUsbApi.dll', ErrorDetail) then Exit;
+  if not CheckPathUnlocked(DirNorm + '\bin\kptools.exe', ErrorDetail) then Exit;
+  if IncludeUninstaller then
+  begin
+    if not CheckPathUnlocked(DirNorm + '\unins000.exe', ErrorDetail) then Exit;
+    if not CheckPathUnlocked(DirNorm + '\unins000.dat', ErrorDetail) then Exit;
+  end;
+  Result := True;
+end;
+
+function RemoveAppOwnedFilesForCleanInstall(const TargetDir: String; const IncludeUninstaller: Boolean; var ErrorDetail: String): Boolean;
 var
   DirNorm: String;
 begin
@@ -397,6 +499,12 @@ begin
   ErrorDetail := '';
   DirNorm := RemoveBackslashUnlessRoot(TargetDir);
   if (DirNorm = '') or (not DirExists(DirNorm)) then Exit;
+
+  if not PreCheckCleanInstallUnlocked(DirNorm, IncludeUninstaller, ErrorDetail) then
+  begin
+    Result := False;
+    Exit;
+  end;
 
   if (not TryRemoveAppSubDir(DirNorm, 'data', ErrorDetail)) or
      (not TryRemoveAppSubDir(DirNorm, 'bin', ErrorDetail)) or
@@ -414,7 +522,78 @@ begin
      (not TryRemoveAppRootFile(DirNorm, 'BUILD_INFO.txt', ErrorDetail)) then
   begin
     Result := False;
+    Exit;
   end;
+
+  if IncludeUninstaller then
+  begin
+    if (not TryRemoveAppRootFile(DirNorm, 'unins000.exe', ErrorDetail)) or
+       (not TryRemoveAppRootFile(DirNorm, 'unins000.dat', ErrorDetail)) or
+       (not TryRemoveAppRootFile(DirNorm, 'unins000.msg', ErrorDetail)) then
+    begin
+      Result := False;
+      Exit;
+    end;
+    RemoveDir(DirNorm);
+  end;
+end;
+
+function VerifyInstalledFileNonEmpty(const DirNorm, RelPath: String; var ErrorDetail: String): Boolean;
+var
+  FullPath: String;
+  FindRec: TFindRec;
+begin
+  Result := False;
+  FullPath := DirNorm + '\' + RelPath;
+  if FindFirst(FullPath, FindRec) then
+  begin
+    try
+      if ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0) and
+         ((FindRec.SizeLow > 0) or (FindRec.SizeHigh > 0)) then
+      begin
+        Result := True;
+      end;
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+  if not Result then
+    ErrorDetail := FullPath;
+end;
+
+function VerifyPostInstallIntegrity(const TargetDir: String; var FailedPath: String): Boolean;
+var
+  DirNorm: String;
+begin
+  Result := False;
+  FailedPath := '';
+  DirNorm := RemoveBackslashUnlessRoot(TargetDir);
+  if not DirExists(DirNorm) then
+  begin
+    FailedPath := DirNorm;
+    Exit;
+  end;
+
+  if (not VerifyInstalledFileNonEmpty(DirNorm, 'FolkTool.exe', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'flutter_windows.dll', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'url_launcher_windows_plugin.dll', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'bin\adb.exe', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'bin\fastboot.exe', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'bin\AdbWinApi.dll', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'bin\AdbWinUsbApi.dll', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'bin\kptools.exe', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'apk\APatch.apk', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'apk\FolkPatch.apk', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'assets\manifests\toolchain_manifest.json', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'kp_versions\folkpatch\kpimg', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'kp_versions\apatch\kpimg', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'unins000.exe', FailedPath)) or
+     (not VerifyInstalledFileNonEmpty(DirNorm, 'unins000.dat', FailedPath)) then
+  begin
+    Exit;
+  end;
+
+  Result := True;
 end;
 
 function VCRedistNeedsInstall: Boolean;
@@ -472,11 +651,16 @@ var
 begin
   Result := False;
   if not FileExists(FilePath) then Exit;
+  SetEnvironmentVariableW('FOLKTOOL_VCREDIST_PATH', FilePath);
   PsArgs := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ' +
-    '"$s = Get-AuthenticodeSignature -LiteralPath ''' + EscapePsSingleQuoted(FilePath) + '''; ' +
-    'if ($s.Status -eq ''Valid'' -and $s.SignerCertificate.Subject -like ''*Microsoft*'') { exit 0 } else { exit 1 }"';
+    '"$s = Get-AuthenticodeSignature -LiteralPath $env:FOLKTOOL_VCREDIST_PATH; ' +
+    '$c = $s.SignerCertificate; ' +
+    'if ($s.Status -eq ''Valid'' -and $null -ne $c -and $null -ne $s.TimeStamperCertificate -and ' +
+    '$c.Subject -like ''*Microsoft Corporation*'' -and $c.Issuer -like ''*Microsoft*'' -and ' +
+    '$c.PublicKey.Oid.Value -eq ''1.2.840.113549.1.1.1'') { exit 0 } else { exit 1 }"';
   if Exec('powershell.exe', PsArgs, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     Result := (ResultCode = 0);
+  SetEnvironmentVariableW('FOLKTOOL_VCREDIST_PATH', '');
 end;
 
 function VCRedistNeedsInstallAndFileExists: Boolean;
@@ -675,11 +859,11 @@ begin
          (Uppercase(ExistingInstallDir) <> Uppercase(TargetDir)) then
       begin
         StopAppScopedProcesses(ExistingInstallDir);
-        if not RemoveAppOwnedFilesForCleanInstall(ExistingInstallDir, FailedItem) then
+        if not RemoveAppOwnedFilesForCleanInstall(ExistingInstallDir, True, FailedItem) then
           RaiseException('Clean install failed while removing previous application files: ' + FailedItem);
       end;
 
-      if not RemoveAppOwnedFilesForCleanInstall(TargetDir, FailedItem) then
+      if not RemoveAppOwnedFilesForCleanInstall(TargetDir, False, FailedItem) then
         RaiseException('Clean install failed because an application file is locked or protected: ' + FailedItem);
 
       if ShouldResetData then
@@ -694,35 +878,25 @@ begin
   else if CurStep = ssPostInstall then
   begin
     RemoveAlternateScopeRegistrations;
+    TargetDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+    if not VerifyPostInstallIntegrity(TargetDir, FailedItem) then
+      RaiseException('Post-install integrity verification failed; missing or empty required file: ' + FailedItem);
   end;
 end;
 
 function InitializeUninstall(): Boolean;
-var
-  AppDir: String;
 begin
   Result := True;
-  AppDir := ExpandConstant('{app}');
-  Log('InitializeUninstall stopping app-scoped processes in: ' + AppDir);
-  if not StopAppScopedProcesses(AppDir) then
-  begin
-    if not UninstallSilent then
-    begin
-      if MsgBox(
-        'FolkTool or one of its bundled tools (adb/fastboot/kptools) appears to still be running from:' + #13#10 +
-        AppDir + #13#10#13#10 +
-        'Close FolkTool before continuing uninstall. Continue uninstall anyway?',
-        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then
-      begin
-        Result := False;
-        Exit;
-      end;
-    end
-    else
-    begin
-      Log('Warning: app-scoped processes may still hold locks prior to silent uninstall.');
-    end;
-  end;
+  Log('InitializeUninstall for: ' + ExpandConstant('{app}'));
+end;
+
+procedure CheckRemainingFile(const AppDir, RelPath: String; var RemainingFiles: String);
+var
+  FullPath: String;
+begin
+  FullPath := AppDir + '\' + RelPath;
+  if FileExists(FullPath) then
+    RemainingFiles := RemainingFiles + FullPath + #13#10;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -732,15 +906,38 @@ var
   RemainingFiles: String;
 begin
   Log('CurUninstallStepChanged phase=' + IntToStr(Ord(CurUninstallStep)));
-  if CurUninstallStep = usUninstall then
+  if CurUninstallStep = usAppMutexCheck then
   begin
     AppDir := ExpandConstant('{app}');
-    Log('Uninstall stopping app-scoped processes in: ' + AppDir);
+    Log('Uninstall stopping app-scoped processes after user confirmation in: ' + AppDir);
+    if not StopAppScopedProcesses(AppDir) then
+    begin
+      if not UninstallSilent then
+      begin
+        if MsgBox(
+          'FolkTool or one of its bundled tools (adb/fastboot/kptools) appears to still be running from:' + #13#10 +
+          AppDir + #13#10#13#10 +
+          'Close FolkTool before continuing uninstall. Continue uninstall anyway?',
+          mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then
+        begin
+          Abort;
+        end;
+      end
+      else
+      begin
+        Log('Warning: app-scoped processes may still hold locks prior to silent uninstall.');
+      end;
+    end;
+  end
+  else if CurUninstallStep = usUninstall then
+  begin
+    AppDir := ExpandConstant('{app}');
     if not StopAppScopedProcesses(AppDir) then
     begin
       Log('Warning: one or more FolkTool processes remained active prior to uninstall.');
     end;
 
+    CleanupOrphanedPatchTempDirs;
     PurgeData := False;
     if UninstallSilent then
     begin
@@ -770,16 +967,19 @@ begin
   end
   else if CurUninstallStep = usPostUninstall then
   begin
-    AppDir := ExpandConstant('{app}');
+    AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
     Log('PostUninstall checking directory: ' + AppDir);
     if AppDir <> '' then
       RemoveDir(AppDir); // Clean empty root directory if no user-created files remain.
 
     RemainingFiles := '';
-    if FileExists(AppDir + '\FolkTool.exe') then
-      RemainingFiles := RemainingFiles + AppDir + '\FolkTool.exe' + #13#10;
-    if FileExists(AppDir + '\flutter_windows.dll') then
-      RemainingFiles := RemainingFiles + AppDir + '\flutter_windows.dll' + #13#10;
+    CheckRemainingFile(AppDir, 'FolkTool.exe', RemainingFiles);
+    CheckRemainingFile(AppDir, 'flutter_windows.dll', RemainingFiles);
+    CheckRemainingFile(AppDir, 'url_launcher_windows_plugin.dll', RemainingFiles);
+    CheckRemainingFile(AppDir, 'bin\adb.exe', RemainingFiles);
+    CheckRemainingFile(AppDir, 'bin\fastboot.exe', RemainingFiles);
+    CheckRemainingFile(AppDir, 'bin\AdbWinApi.dll', RemainingFiles);
+    CheckRemainingFile(AppDir, 'bin\kptools.exe', RemainingFiles);
 
     if RemainingFiles <> '' then
     begin
