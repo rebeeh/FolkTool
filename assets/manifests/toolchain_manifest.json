@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 2,
+  "platformTools": {
+    "version": "37.0.3",
+    "releaseDate": "2026-11-19",
+    "sourceUrl": "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
+    "zipSha256": "89d108360a3bf2924d3bea837239edaccc22fd6ff5befd3787c4348a9fe4f09d",
+    "expectedSigner": "Google LLC",
+    "files": {
+      "adb.exe": {
+        "size": 8659608,
+        "sha256": "bae5ce98846b19caa74a34900850caa8b21d01976932b2ad83baeb5de5651aee"
+      },
+      "fastboot.exe": {
+        "size": 2519704,
+        "sha256": "f8335c9f07a945aa5226418906f0be42c6349def16643343549174e55ac7c789"
+      },
+      "AdbWinApi.dll": {
+        "size": 108184,
+        "sha256": "ed20abfb8b423029a2278d3947c1a1235774afd1b0e0e08405591e6f1d237a49"
+      },
+      "AdbWinUsbApi.dll": {
+        "size": 73368,
+        "sha256": "ac658211ac7991ce581f4f2efff86358abdca8eb1bc0f38d7686cbf4215f7c1f"
+      }
+    }
+  },
+  "targets": {
+    "folkpatch": {
+      "product": "FolkPatch",
+      "packageName": "me.yuki.folk",
+      "repoUrl": "https://github.com/LyraVoid/FolkPatch",
+      "defaultApkDest": "apk/FolkPatch.apk",
+      "defaultKpimgDest": "kp_versions/folkpatch/kpimg",
+      "kptools": {
+        "version": "0.13.9-folkpatch",
+        "repoUrl": "https://github.com/LyraVoid/KernelPatch",
+        "archiveUrl": "https://github.com/LyraVoid/KernelPatch/releases/download/0.13.9/kptools-msys2-win.7z",
+        "archiveSha256": "3ac83064a2ac0b426da045e3c04530af3e882e9b73700381f411ad1d8505a266",
+        "kptoolsExeSha256": "1a910869e9bbfe2de7d558839f945bd2c30d0a939dd76267c2007e3311590610",
+        "installDir": "kp_versions/folkpatch/windows"
+      },
+      "releases": [
+        {
+          "id": "folkpatch-115404",
+          "product": "FolkPatch",
+          "managerVersion": "115404",
+          "tag": "115404",
+          "kernelPatchVersion": "0.13.9",
+          "releaseDate": "2026-10-30",
+          "channel": "stable",
+          "recommended": true,
+          "supportsUnpack": true,
+          "androidSupport": "Android 9 - 16+ (Kernel 3.18 - 6.18)",
+          "minKernel": "3.18",
+          "maxKernel": "6.18",
+          "notesKey": "catalogNotesFolkpatch115404",
+          "apkAssetName": "FolkPatch_115404_0f3f42ba_on_main-release.apk",
+          "apkUrl": "https://github.com/LyraVoid/FolkPatch/releases/download/115404/FolkPatch_115404_0f3f42ba_on_main-release.apk",
+          "apkSha256": "1d29c147443ce0986e3d9f5241f9d377dc1e9c7a60ea51c165737748c5302d2f",
+          "kpimgRelPath": "folkpatch/115404_kp0.13.9/kpimg",
+          "kpimgSha256": "7a7aa4b930d1a9d684cbb426a3999f75cb2e2cead26673dcbbc5f70871f01141"
+        },
+        {
+          "id": "folkpatch-115357",
+          "product": "FolkPatch",
+          "managerVersion": "115357",
+          "tag": "115357",
+          "kernelPatchVersion": "0.13.9",
+          "releaseDate": "2026-10-12",
+          "channel": "stable",
+          "recommended": false,
+          "supportsUnpack": true,
+          "androidSupport": "Android 9 - 16+ (Kernel 3.18 - 6.18)",
+          "minKernel": "3.18",
+          "maxKernel": "6.18",
+          "notesKey": "catalogNotesFolkpatch115357",
+          "apkAssetName": "FolkPatch_115357_a843c526_on_main-release.apk",
+          "apkUrl": "https://github.com/LyraVoid/FolkPatch/releases/download/115357/FolkPatch_115357_a843c526_on_main-release.apk",
+          "apkSha256": "f73a3cd9438f871e3461954123174aabcf9631e53f465225f729f27a3371cb06",
+          "kpimgRelPath": "folkpatch/115357_kp0.13.9/kpimg",
+          "kpimgSha256": "c9e1091d0d633a999318e5073f7994466032609a4d62eb26a78e601c448a20df"
+        },
+        {
+          "id": "folkpatch-115032",
+          "product": "FolkPatch",
+          "managerVersion": "v5.0 (115032)",
+          "tag": "kp0.13.8",
+          "kernelPatchVersion": "0.13.8",
+          "releaseDate": "2026-08-31",
+          "channel": "stable",
+          "recommended": false,
+          "supportsUnpack": true,
+          "androidSupport": "Android 9 - 16 (Kernel 3.18 - 6.15)",
+          "minKernel": "3.18",
+          "maxKernel": "6.15",
+          "notesKey": "catalogNotesFolkpatch0138",
+          "apkAssetName": "FolkPatch_115032_5.0_on_main-release.apk",
+          "apkUrl": "https://github.com/LyraVoid/FolkPatch/releases/download/kp0.13.8/FolkPatch_115032_5.0_on_main-release.apk",
+          "apkSha256": "0b1671fe42a565a4fb8a573ac9b480febe11189380f96c83ccbe29fdfd375890",
+          "kpimgRelPath": "folkpatch/kp0.13.8/kpimg",
+          "kpimgSha256": "d22352eee8bc1452436b1c3ee9ba7ebfb4408a1ba93456f02333a23c56df1509"
+        }
+      ]
+    },
+    "apatch": {
+      "product": "APatch",
+      "packageName": "me.bmax.apatch",
+      "repoUrl": "https://github.com/bmax121/APatch",
+      "defaultApkDest": "apk/APatch.apk",
+      "defaultKpimgDest": "kp_versions/apatch/kpimg",
+      "kptools": {
+        "version": "0.13.9-upstream",
+        "repoUrl": "https://github.com/bmax121/KernelPatch",
+        "archiveUrl": "https://github.com/bmax121/KernelPatch/releases/download/0.13.9/kptools-msys2-win.7z",
+        "archiveSha256": "3fda1648816dd383fd8db341b81af7a938d97205ef09667ce94466369a7148ce",
+        "kptoolsExeSha256": "bc785944f78f0348b68ba5ca132c53566a809b8c707c621d52501a08e8cec03c",
+        "installDir": "kp_versions/apatch/windows"
+      },
+      "releases": [
+        {
+          "id": "apatch-11282",
+          "product": "APatch",
+          "managerVersion": "11282",
+          "tag": "11282",
+          "kernelPatchVersion": "0.13.9",
+          "releaseDate": "2026-10-15",
+          "channel": "stable",
+          "recommended": true,
+          "supportsUnpack": true,
+          "androidSupport": "Android 9 - 16 (Kernel 3.18 - 6.15)",
+          "minKernel": "3.18",
+          "maxKernel": "6.15",
+          "notesKey": "catalogNotesApatch11282",
+          "apkAssetName": "APatch_11282_e8e4651_HEAD-release-signed.apk",
+          "apkUrl": "https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk",
+          "apkSha256": "d6bf0dbcab95fb9a3aa111c35efd945267bcce3a41377c3297c3c1a9eab421a5",
+          "kpimgRelPath": "apatch/11282_kp0.13.9/kpimg",
+          "kpimgSha256": "eb2e3d16fe69410150efcf6f9425baf8cad9ac0c39f051fc8b40ce57c7143adb"
+        },
+        {
+          "id": "apatch-11224",
+          "product": "APatch",
+          "managerVersion": "11224",
+          "tag": "11224",
+          "kernelPatchVersion": "0.13.3",
+          "releaseDate": "2026-08-07",
+          "channel": "stable",
+          "recommended": false,
+          "supportsUnpack": true,
+          "androidSupport": "Android 9 - 16 (Kernel 3.18 - 6.15)",
+          "minKernel": "3.18",
+          "maxKernel": "6.15",
+          "notesKey": "catalogNotesApatch11224",
+          "apkAssetName": "APatch_11224_9a63e0f_HEAD-release-signed.apk",
+          "apkUrl": "https://github.com/bmax121/APatch/releases/download/11224/APatch_11224_9a63e0f_HEAD-release-signed.apk",
+          "apkSha256": "f1986f9a9c3b2b2d5ca09aa6b9ef24226fef662f8faf5677ce1447ffcae68590",
+          "kpimgRelPath": "apatch/11224_kp0.13.3/kpimg",
+          "kpimgSha256": "8f472d389d00f11c2d34c7059e1df8d580b9cb7d8c9f99b70877801b52992e2a"
+        },
+        {
+          "id": "apatch-11142",
+          "product": "APatch",
+          "managerVersion": "11142",
+          "tag": "11142",
+          "kernelPatchVersion": "0.12.2",
+          "releaseDate": "2025-11-12",
+          "channel": "legacy",
+          "recommended": false,
+          "supportsUnpack": false,
+          "androidSupport": "Legacy Android 9 - 15 (Kernel 3.18 - 6.6)",
+          "minKernel": "3.18",
+          "maxKernel": "6.6",
+          "notesKey": "catalogNotesApatch11142",
+          "apkAssetName": "APatch_11142_166daa0_on_HEAD-release-signed.apk",
+          "apkUrl": "https://github.com/bmax121/APatch/releases/download/11142/APatch_11142_166daa0_on_HEAD-release-signed.apk",
+          "apkSha256": "1695a51f5741c602fab50f389949e0d356a639708fc97663b0fc8a2a2d47ee81",
+          "kpimgRelPath": "apatch/11142_kp0.12.2/kpimg",
+          "kpimgSha256": "414b31fa6de223a083c079ad76c9a771aff02451b093692dbf07dac24193b510"
+        }
+      ]
+    }
+  }
+}
