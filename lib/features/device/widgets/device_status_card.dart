@@ -36,17 +36,24 @@ class DeviceStatusCard extends StatelessWidget {
                         color: colorScheme.primary,
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        l10n.deviceStatus,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurface,
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              l10n.deviceStatus,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                            _buildStatusPill(context, deviceProvider, l10n),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      _buildStatusPill(context, deviceProvider, l10n),
-                      const Spacer(),
                       if (showRefreshButton)
                         SizedBox(
                           height: 32,
@@ -104,36 +111,49 @@ class DeviceStatusCard extends StatelessWidget {
     S l10n,
   ) {
     final semantic = context.semantic;
+    final colorScheme = Theme.of(context).colorScheme;
     Color dotColor;
     String label;
     switch (provider.connectionState) {
       case DeviceConnectionState.adbConnected:
         dotColor = semantic.success;
-        label = 'ADB';
+        label = l10n.deviceStateAdb;
         break;
       case DeviceConnectionState.fastbootConnected:
         dotColor = semantic.success;
-        label = 'Fastboot';
+        label = l10n.deviceStateFastboot;
+        break;
+      case DeviceConnectionState.fastbootdConnected:
+        dotColor = semantic.warning;
+        label = l10n.deviceStateFastbootd;
         break;
       case DeviceConnectionState.adbUnauthorized:
         dotColor = semantic.warning;
-        label = 'Unauthorized';
+        label = l10n.deviceStateUnauthorized;
         break;
       case DeviceConnectionState.adbOffline:
         dotColor = semantic.warning;
-        label = 'Offline';
+        label = l10n.deviceStateOffline;
         break;
       case DeviceConnectionState.multipleDevices:
         dotColor = semantic.warning;
-        label = 'Multiple';
+        label = l10n.deviceStateMultiple;
+        break;
+      case DeviceConnectionState.unsupportedMode:
+        dotColor = semantic.warning;
+        label = l10n.deviceStateUnsupported;
+        break;
+      case DeviceConnectionState.error:
+        dotColor = colorScheme.error;
+        label = l10n.deviceStateError;
         break;
       case DeviceConnectionState.checking:
-        dotColor = Theme.of(context).colorScheme.primary;
+        dotColor = colorScheme.primary;
         label = l10n.checking;
         break;
       case DeviceConnectionState.disconnected:
-        dotColor = Theme.of(context).colorScheme.outline;
-        label = l10n.noDeviceDetected;
+        dotColor = colorScheme.outline;
+        label = l10n.deviceStateDisconnected;
         break;
     }
 
@@ -170,6 +190,7 @@ class DeviceStatusCard extends StatelessWidget {
 
   Widget _buildStatusContent(BuildContext context, DeviceProvider provider) {
     final l10n = S.of(context);
+    final colorScheme = Theme.of(context).colorScheme;
 
     if (!provider.driverInstalled) {
       return _buildWarningItem(
@@ -189,17 +210,54 @@ class DeviceStatusCard extends StatelessWidget {
         final dev = provider.unauthorizedAdbDevices.first;
         return _buildWarningItem(
           context,
-          'USB Debugging Unauthorized (${dev.serial})',
-          'Unlock your phone screen and tap "Allow USB debugging" (check "Always allow from this computer").',
+          l10n.usbUnauthorizedTitle(dev.serial),
+          l10n.usbUnauthorizedDesc,
           context.semantic.warning,
         );
       case DeviceConnectionState.adbOffline:
         final dev = provider.offlineAdbDevices.first;
         return _buildWarningItem(
           context,
-          'ADB Device Offline (${dev.serial})',
-          'Reconnect the USB cable, try a USB 2.0/rear port, or toggle USB Debugging off and back on.',
+          l10n.adbOfflineTitle(dev.serial),
+          l10n.adbOfflineDesc,
           context.semantic.warning,
+        );
+      case DeviceConnectionState.fastbootdConnected:
+        final dev = provider.selectedTargetDevice ?? provider.fastbootDevices.first;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildWarningItem(
+              context,
+              l10n.fastbootdDetectedTitle(dev.serial),
+              l10n.fastbootdDetectedDesc,
+              context.semantic.warning,
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                onPressed: () => provider.rebootFastbootdToBootloader(),
+                icon: const Icon(Icons.restart_alt, size: 18),
+                label: Text(l10n.rebootToFastboot),
+              ),
+            ),
+          ],
+        );
+      case DeviceConnectionState.unsupportedMode:
+        final dev = provider.unsupportedDevices.first;
+        return _buildWarningItem(
+          context,
+          l10n.unsupportedModeTitle(dev.localizedStateText(l10n), dev.serial),
+          l10n.unsupportedModeDesc,
+          context.semantic.warning,
+        );
+      case DeviceConnectionState.error:
+        return _buildWarningItem(
+          context,
+          l10n.deviceErrorTitle,
+          provider.errorMessage ?? l10n.noDeviceDetectedDesc,
+          colorScheme.error,
         );
       case DeviceConnectionState.multipleDevices:
         return _buildMultipleDevices(context, provider);
@@ -242,12 +300,14 @@ class DeviceStatusCard extends StatelessWidget {
                   Icon(Icons.help_outline,
                       size: 16, color: colorScheme.primary),
                   const SizedBox(width: 6),
-                  Text(
-                    l10n.deviceConnectionTips,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: colorScheme.onSurface,
+                  Expanded(
+                    child: Text(
+                      l10n.deviceConnectionTips,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
                     ),
                   ),
                 ],
@@ -269,6 +329,7 @@ class DeviceStatusCard extends StatelessWidget {
   }
 
   Widget _buildMultipleDevices(BuildContext context, DeviceProvider provider) {
+    final l10n = S.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final semantic = context.semantic;
     final candidates = [
@@ -281,8 +342,8 @@ class DeviceStatusCard extends StatelessWidget {
       children: [
         _buildWarningItem(
           context,
-          'Multiple Devices Detected',
-          'Select one target device or disconnect extra devices before flashing.',
+          l10n.multipleDevicesTitle,
+          l10n.multipleDevicesDesc,
           semantic.warning,
         ),
         if (candidates.isNotEmpty) ...[
@@ -293,7 +354,7 @@ class DeviceStatusCard extends StatelessWidget {
             children: candidates.map((d) {
               final selected = provider.selectedSerial == d.serial;
               return ChoiceChip(
-                label: Text('${d.model ?? d.serial} (${d.stateText})'),
+                label: Text('${d.model ?? d.serial} (${d.localizedStateText(l10n)})'),
                 selected: selected,
                 selectedColor: colorScheme.primaryContainer,
                 onSelected: (_) => provider.selectDevice(d.serial),
@@ -313,8 +374,9 @@ class DeviceStatusCard extends StatelessWidget {
       l10n.serial(device.serial),
       if (device.model != null && device.model!.isNotEmpty) device.model!,
       if (device.androidVersion != null && device.androidVersion!.isNotEmpty)
-        'Android ${device.androidVersion}',
-      if (device.batteryLevel != null) 'Battery ${device.batteryLevel}%',
+        l10n.androidVersionLabel(device.androidVersion!),
+      if (device.batteryLevel != null)
+        l10n.batteryLevelLabel(device.batteryLevel!),
     ].join(' • ');
 
     return _buildStatusItem(
@@ -333,8 +395,8 @@ class DeviceStatusCard extends StatelessWidget {
     final lockText = device.bootloaderUnlocked == null
         ? ''
         : (device.bootloaderUnlocked!
-            ? ' • Bootloader Unlocked'
-            : ' • Bootloader Locked');
+            ? ' • ${l10n.bootloaderUnlockedLabel}'
+            : ' • ${l10n.bootloaderLockedLabel}');
     return _buildStatusItem(
       context,
       l10n.fastbootConnected,
@@ -379,7 +441,7 @@ class DeviceStatusCard extends StatelessWidget {
               color: color.withValues(alpha: 0.16),
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: color, size: 20),
+            child: Icon(icon, color: color, size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -391,7 +453,7 @@ class DeviceStatusCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurface,
+                    color: color,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -416,51 +478,12 @@ class DeviceStatusCard extends StatelessWidget {
     String subtitle,
     Color color,
   ) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.18),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.warning_amber, color: color, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return _buildStatusItem(
+      context,
+      title,
+      subtitle,
+      color,
+      Icons.warning_amber_outlined,
     );
   }
 }
