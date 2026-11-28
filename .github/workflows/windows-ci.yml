@@ -143,7 +143,7 @@ jobs:
               $bundled += Get-ChildItem -Path $dir -File | Where-Object { $_.Extension -in ".exe", ".dll" } | Select-Object -ExpandProperty FullName
             }
           }
-          & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets $bundled
+          & "$PWD\scripts\audit_pe_trust.ps1" -Targets $bundled
 
       - name: Configure Signing Provider (non-PR builds only)
         if: github.event_name != 'pull_request'
@@ -261,7 +261,7 @@ jobs:
             }
           }
 
-          & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets $targets -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
+          & "$PWD\scripts\audit_pe_trust.ps1" -Targets $targets -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
 
       - name: Ensure Inno Setup 6 is installed
         shell: pwsh
@@ -315,7 +315,7 @@ jobs:
           & pwsh -NoProfile -File "scripts\verify_pe_icon.ps1" -BinaryPath $setupExe
 
           if ($env:IS_SIGNED -eq "true") {
-            & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets @($setupExe) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
+            & "$PWD\scripts\audit_pe_trust.ps1" -Targets @($setupExe) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
           }
 
       - name: Smoke test install, upgrade/repair, running-app close, clean install, uninstall & reinstall
@@ -389,11 +389,11 @@ jobs:
           Assert-InstalledFiles $customDir
 
           $uninsExe1 = Join-Path $customDir "unins000.exe"
-          & pwsh -NoProfile -File "scripts\verify_pe_icon.ps1" -BinaryPath $uninsExe1
+          & "$PWD\scripts\verify_pe_icon.ps1" -BinaryPath $uninsExe1
           if ($env:IS_SIGNED -eq "true") {
-            & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
+            & "$PWD\scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
           } else {
-            & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1)
+            & "$PWD\scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1)
           }
 
           $regPath = "HKLM:\$appIdKey"
