@@ -88,7 +88,16 @@ jobs:
       - name: Build Windows Release
         shell: pwsh
         run: |
-          flutter build windows --release --dart-define=APP_VERSION=${{ env.APP_VERSION }}
+          $out = flutter build windows --release --dart-define=APP_VERSION=${{ env.APP_VERSION }} 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            foreach ($line in ($out -split "`r?`n")) {
+              if ($line -match "error\s+[A-Z0-9]+:|fatal error|mt\.exe|rc\.exe|LINK :|CMake Error") {
+                Write-Host "::error::$line"
+              }
+            }
+            exit 1
+          }
 
       - name: Verify PE architecture, manifest, icon resources & CRT dependencies
         shell: pwsh
