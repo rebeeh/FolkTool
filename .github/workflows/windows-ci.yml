@@ -140,7 +140,7 @@ jobs:
           $bundled = @()
           foreach ($dir in @("bin", "kp_versions\windows", "drive")) {
             if (Test-Path $dir) {
-              $bundled += Get-ChildItem -Path $dir -File -Include *.exe,*.dll | Select-Object -ExpandProperty FullName
+              $bundled += Get-ChildItem -Path $dir -File | Where-Object { $_.Extension -in ".exe", ".dll" } | Select-Object -ExpandProperty FullName
             }
           }
           & pwsh -NoProfile -File "scripts\audit_pe_trust.ps1" -Targets $bundled
@@ -229,7 +229,7 @@ jobs:
           CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $releaseDir = "build\windows\x64\runner\Release"
-          $targets = Get-ChildItem -Path $releaseDir -File -Include *.exe,*.dll | Select-Object -ExpandProperty FullName
+          $targets = Get-ChildItem -Path $releaseDir -File | Where-Object { $_.Extension -in ".exe", ".dll" } | Select-Object -ExpandProperty FullName
           if ($targets.Count -eq 0) { throw "No release binaries found in $releaseDir" }
 
           if ($env:SIGN_MODE -eq "azure") {
