@@ -155,7 +155,7 @@ jobs:
         shell: pwsh
         run: |
           $bundled = @()
-          foreach ($dir in @("bin", "kp_versions\windows", "drive")) {
+          foreach ($dir in @("bin", "kp_versions\folkpatch\windows", "kp_versions\apatch\windows", "kp_versions\windows", "drive")) {
             if (Test-Path $dir) {
               $bundled += Get-ChildItem -Path $dir -File | Where-Object { $_.Extension -in ".exe", ".dll" } | Select-Object -ExpandProperty FullName
             }
@@ -238,44 +238,29 @@ jobs:
           "AZURE_DLIB_PATH=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "AZURE_META_PATH=$metaPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Sign First-Party Release Binaries
-        if: env.IS_SIGNED == 'true'
+      - name: Stage PFX Signing Material (PFX mode only)
+        if: env.SIGN_MODE == 'pfx'
         shell: pwsh
         env:
           CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CERT_B64))
+          "SIGN_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign First-Party Release Binaries
+        if: env.IS_SIGNED == 'true'
+        shell: pwsh
+        env:
+          SIGN_PFX_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
           $releaseDir = "build\windows\x64\runner\Release"
           $targets = Get-ChildItem -Path $releaseDir -File | Where-Object { $_.Extension -in ".exe", ".dll" } | Select-Object -ExpandProperty FullName
           if ($targets.Count -eq 0) { throw "No release binaries found in $releaseDir" }
 
-          if ($env:SIGN_MODE -eq "azure") {
-            foreach ($t in $targets) {
-              $sig = Get-AuthenticodeSignature -LiteralPath $t
-              if ($sig.Status -eq "Valid" -and $sig.SignerCertificate.Subject -like "*Microsoft*") {
-                Write-Host "Preserving existing Microsoft signature on $t"
-                continue
-              }
-              & "$env:SIGNTOOL_PATH" sign /v /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 `
-                /dlib "$env:AZURE_DLIB_PATH" /dmdf "$env:AZURE_META_PATH" $t
-              if ($LASTEXITCODE -ne 0) { throw "Artifact Signing failed for $t" }
-            }
-          } elseif ($env:SIGN_MODE -eq "pfx") {
-            $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CERT_B64))
-            try {
-              foreach ($t in $targets) {
-                $sig = Get-AuthenticodeSignature -LiteralPath $t
-                if ($sig.Status -eq "Valid" -and $sig.SignerCertificate.Subject -like "*Microsoft*") {
-                  Write-Host "Preserving existing Microsoft signature on $t"
-                  continue
-                }
-                & "$env:SIGNTOOL_PATH" sign /f $pfxPath /p $env:CERT_PASS /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 $t
-                if ($LASTEXITCODE -ne 0) { throw "PFX signing failed for $t" }
-              }
-            } finally {
-              Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
-            }
+          foreach ($t in $targets) {
+            & "$PWD\scripts\sign_pe.ps1" -Target $t -PreserveMicrosoftSignature
           }
 
           & "$PWD\scripts\audit_pe_trust.ps1" -Targets $targets -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
@@ -295,8 +280,7 @@ jobs:
       - name: Compile installer.iss (with SignedUninstaller when enabled) & verify installer icon/signature
         shell: pwsh
         env:
-          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          SIGN_PFX_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
           $isccArgs = @(
@@ -306,24 +290,12 @@ jobs:
             "/DMyAppRepoUrl=$repoUrl"
           )
 
-          if ($env:SIGN_MODE -eq "azure") {
-            $signCmd = "`"$env:SIGNTOOL_PATH`" sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib `"$env:AZURE_DLIB_PATH`" /dmdf `"$env:AZURE_META_PATH`" `$f"
+          if ($env:IS_SIGNED -eq "true") {
+            $signScript = (Resolve-Path "scripts\sign_pe.ps1").Path
             $isccArgs += "/DEnableSigning=1"
-            $isccArgs += "/Sfolktool_sign=$signCmd"
+            $isccArgs += "/Sfolktool_sign=powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `$q$signScript`$q -Target `$p"
             & "$env:ISCC" @isccArgs installer.iss
             if ($LASTEXITCODE -ne 0) { throw "installer.iss signed compilation failed" }
-          } elseif ($env:SIGN_MODE -eq "pfx") {
-            $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CERT_B64))
-            try {
-              $signCmd = "`"$env:SIGNTOOL_PATH`" sign /f `"$pfxPath`" /p `"$env:CERT_PASS`" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `$f"
-              $isccArgs += "/DEnableSigning=1"
-              $isccArgs += "/Sfolktool_sign=$signCmd"
-              & "$env:ISCC" @isccArgs installer.iss
-              if ($LASTEXITCODE -ne 0) { throw "installer.iss signed compilation failed" }
-            } finally {
-              Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
-            }
           } else {
             & "$env:ISCC" @isccArgs installer.iss
             if ($LASTEXITCODE -ne 0) { throw "installer.iss compilation failed" }
@@ -331,11 +303,19 @@ jobs:
 
           $setupExe = "installer\FolkTool-Setup.exe"
           if (-not (Test-Path $setupExe)) { throw "Expected output $setupExe not found" }
-          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $setupExe -ExpectedVersion $env:APP_NUMERIC_VERSION
+          & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $setupExe -ExpectedVersion $env:APP_NUMERIC_VERSION -CheckStringVersion
           & pwsh -NoProfile -File "scripts\verify_pe_icon.ps1" -BinaryPath $setupExe
 
           if ($env:IS_SIGNED -eq "true") {
             & "$PWD\scripts\audit_pe_trust.ps1" -Targets @($setupExe) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
+          }
+
+      - name: Cleanup Temporary PFX Material
+        if: always() && env.SIGN_MODE == 'pfx'
+        shell: pwsh
+        run: |
+          if ($env:SIGN_PFX_PATH -and (Test-Path -LiteralPath $env:SIGN_PFX_PATH)) {
+            Remove-Item -LiteralPath $env:SIGN_PFX_PATH -Force -ErrorAction SilentlyContinue
           }
 
       - name: Smoke test install, upgrade/repair, running-app close, clean install, uninstall & reinstall
@@ -344,21 +324,28 @@ jobs:
           try {
           New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
           $appIdKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1"
+          $legacyKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\FolkTool_is1"
           $docsRoot = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "FolkTool"
           $appDataRoot = Join-Path $env:APPDATA "FolkTool"
-          $customDir = "C:\Temp\FolkToolCustomInstall"
+          $customDir = "C:\Temp\FolkTool Custom Dir (x64)"
+          $cleanDir = "C:\Temp\FolkToolCleanTarget"
           $defaultDir = "C:\Program Files\FolkTool"
+          $startMenuDir = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "FolkTool"
 
           function Assert-InstalledFiles([string]$Dir) {
             foreach ($rel in @(
               "FolkTool.exe", "flutter_windows.dll", "url_launcher_windows_plugin.dll", "unins000.exe", "unins000.dat",
-              "bin\kptools.exe", "bin\adb.exe", "bin\fastboot.exe", "bin\msys-2.0.dll", "bin\platform-tools.source.properties",
+              "bin\kptools.exe", "bin\adb.exe", "bin\fastboot.exe", "bin\AdbWinApi.dll", "bin\AdbWinUsbApi.dll",
+              "bin\msys-2.0.dll", "bin\platform-tools.source.properties",
               "apk\APatch.apk", "apk\FolkPatch.apk", "assets\kpimg", "assets\manifests\toolchain_manifest.json",
               "kp_versions\folkpatch\kpimg", "kp_versions\apatch\kpimg",
               "kp_versions\folkpatch\115404_kp0.13.9\kpimg", "kp_versions\apatch\11282_kp0.13.9\kpimg"
             )) {
               $p = Join-Path $Dir $rel
               if (-not (Test-Path $p)) { throw "Missing installed file: $p" }
+            }
+            if (Test-Path (Join-Path $Dir "bin\7za.exe")) {
+              throw "Unused unsigned bin\7za.exe should not be shipped inside $Dir"
             }
           }
 
@@ -410,22 +397,45 @@ jobs:
           if ($p1.ExitCode -ne 0) { throw "First install failed with $($p1.ExitCode)" }
           Assert-InstalledFiles $customDir
 
+          # Verify Start Menu shortcuts and icon targets
+          $wsh = New-Object -ComObject WScript.Shell
+          $appLnkPath = Join-Path $startMenuDir "FolkTool.lnk"
+          $uninsLnkPath = Join-Path $startMenuDir "Uninstall FolkTool.lnk"
+          if (-not (Test-Path $appLnkPath)) { throw "Start Menu shortcut missing: $appLnkPath" }
+          if (-not (Test-Path $uninsLnkPath)) { throw "Start Menu uninstall shortcut missing: $uninsLnkPath" }
+          $appLnk = $wsh.CreateShortcut($appLnkPath)
+          $uninsLnk = $wsh.CreateShortcut($uninsLnkPath)
+          if ($appLnk.TargetPath -ne (Join-Path $customDir "FolkTool.exe")) {
+            throw "Unexpected Start Menu shortcut target: $($appLnk.TargetPath)"
+          }
+          if ($uninsLnk.TargetPath -ne (Join-Path $customDir "unins000.exe")) {
+            throw "Unexpected Start Menu uninstall target: $($uninsLnk.TargetPath)"
+          }
+
           $uninsExe1 = Join-Path $customDir "unins000.exe"
+          $installedAuditTargets = @(
+            (Join-Path $customDir "FolkTool.exe"),
+            (Join-Path $customDir "flutter_windows.dll"),
+            (Join-Path $customDir "url_launcher_windows_plugin.dll"),
+            $uninsExe1
+          )
           & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath (Join-Path $customDir "FolkTool.exe") -ExpectedVersion $env:APP_NUMERIC_VERSION -CheckStringVersion
           & pwsh -NoProfile -File "scripts\verify_pe_version.ps1" -BinaryPath $uninsExe1 -ExpectedVersion $env:APP_NUMERIC_VERSION
           & "$PWD\scripts\verify_pe_icon.ps1" -BinaryPath $uninsExe1
           if ($env:IS_SIGNED -eq "true") {
-            & "$PWD\scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1) -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
+            & "$PWD\scripts\audit_pe_trust.ps1" -Targets $installedAuditTargets -RequireValidSignature -SigntoolPath $env:SIGNTOOL_PATH
           } else {
-            & "$PWD\scripts\audit_pe_trust.ps1" -Targets @((Join-Path $customDir "FolkTool.exe"), $uninsExe1)
+            & "$PWD\scripts\audit_pe_trust.ps1" -Targets $installedAuditTargets
           }
 
           $regPath = "HKLM:\$appIdKey"
           if (-not (Test-Path $regPath)) { throw "Uninstall registry entry missing at $regPath" }
           $regProps = Get-ItemProperty $regPath
-          Write-Host "Uninstall Reg: DisplayName=$($regProps.DisplayName) | Ver=$($regProps.DisplayVersion) | Uninst=$($regProps.UninstallString)"
+          Write-Host "Uninstall Reg: DisplayName=$($regProps.DisplayName) | Ver=$($regProps.DisplayVersion) | Icon=$($regProps.DisplayIcon) | Uninst=$($regProps.UninstallString)"
           if ($regProps.DisplayName -ne "FolkTool") { throw "Unexpected DisplayName: $($regProps.DisplayName)" }
           if ($regProps.DisplayVersion -ne $env:APP_VERSION) { throw "DisplayVersion mismatch: $($regProps.DisplayVersion) != $env:APP_VERSION" }
+          if ($regProps.Publisher -ne "FolkTool") { throw "Unexpected Publisher: $($regProps.Publisher)" }
+          if ($regProps.DisplayIcon -notlike "*FolkTool.exe*") { throw "Missing DisplayIcon in Uninstall key: $($regProps.DisplayIcon)" }
           if (-not $regProps.UninstallString -or -not ($regProps.UninstallString -match 'unins000\.exe')) {
             throw "Malformed UninstallString: $($regProps.UninstallString)"
           }
@@ -434,7 +444,7 @@ jobs:
             throw "UninstallString points to missing uninstaller: $parsedUninstPath"
           }
 
-          Write-Host "=== 2. Seed simulated user settings, patched output, backup & logs + broken orphan entry ==="
+          Write-Host "=== 2. Seed user settings, patched/backup/log files, orphaned temp & simulated older 1.6.9 + legacy FolkTool_is1 upgrade ==="
           New-Item -ItemType Directory -Force -Path (Join-Path $appDataRoot "FolkTool") | Out-Null
           '{"flutter.settings_confirm_flash":true}' | Out-File -FilePath (Join-Path $appDataRoot "FolkTool\shared_preferences.json") -Encoding utf8
           foreach ($sub in @("patched", "backup", "logs")) {
@@ -447,31 +457,75 @@ jobs:
           "STOCK_BACKUP" | Out-File -FilePath $userBackup -Encoding utf8
           "DIAG_LOG" | Out-File -FilePath $userLog -Encoding utf8
 
-          # Seed stale FolkTool_is1 HKCU key pointing to a non-existent uninstaller to verify automatic orphan pruning.
-          $staleKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FolkTool_is1"
-          New-Item -Path $staleKey -Force | Out-Null
-          Set-ItemProperty -Path $staleKey -Name "DisplayName" -Value "FolkTool 1.7.0"
-          Set-ItemProperty -Path $staleKey -Name "UninstallString" -Value '"C:\NonExistent\FolkTool\unins000.exe"'
+          # Downgrade simulated registry metadata to 1.6.9 + seed live legacy FolkTool_is1 to test zero-duplicate upgrade.
+          Set-ItemProperty -Path $regPath -Name "DisplayVersion" -Value "1.6.9"
+          $legacyLiveKey = "HKLM:\$legacyKey"
+          New-Item -Path $legacyLiveKey -Force | Out-Null
+          Set-ItemProperty -Path $legacyLiveKey -Name "DisplayName" -Value "FolkTool 1.6.9"
+          Set-ItemProperty -Path $legacyLiveKey -Name "DisplayVersion" -Value "1.6.9"
+          Set-ItemProperty -Path $legacyLiveKey -Name "InstallLocation" -Value $customDir
+          Set-ItemProperty -Path $legacyLiveKey -Name "UninstallString" -Value "`"$uninsExe1`""
 
-          Write-Host "=== 3. Repair / corrupted uninstaller recovery (restore deleted DLL & missing unins000.dat) ==="
+          $staleCuKey = "HKCU:\$legacyKey"
+          New-Item -Path $staleCuKey -Force | Out-Null
+          Set-ItemProperty -Path $staleCuKey -Name "DisplayName" -Value "FolkTool 1.6.9"
+          Set-ItemProperty -Path $staleCuKey -Name "UninstallString" -Value '"C:\NonExistent\FolkTool\unins000.exe"'
+
+          Write-Host "=== 3. Normal upgrade + Repair / corrupted uninstaller recovery ==="
           Remove-Item (Join-Path $customDir "url_launcher_windows_plugin.dll") -Force
           Remove-Item (Join-Path $customDir "unins000.dat") -Force
           $pRepair = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
             -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /DIR=`"$customDir`"" `
             -Wait -PassThru
-          if ($pRepair.ExitCode -ne 0) { throw "Repair/upgrade failed with $($pRepair.ExitCode)" }
+          if ($pRepair.ExitCode -ne 0) { throw "Upgrade/repair failed with $($pRepair.ExitCode)" }
           Assert-InstalledFiles $customDir
-          if (Test-Path $staleKey) { throw "Stale broken uninstall entry was not pruned during repair!" }
+          if ((Get-ItemProperty $regPath).DisplayVersion -ne $env:APP_VERSION) {
+            throw "Upgrade failed to bump DisplayVersion back to $env:APP_VERSION"
+          }
+          if ((Test-Path $staleCuKey) -or (Test-Path $legacyLiveKey)) {
+            throw "Legacy FolkTool_is1 uninstall entries were not cleaned during upgrade/repair!"
+          }
           if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Settings were lost during upgrade/repair!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) { throw "User files were lost during upgrade/repair!" }
 
-          $matchesHKLM = @(Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | Where-Object { $_.PSChildName -eq "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1" -or $_.GetValue("DisplayName") -eq "FolkTool" })
-          if ($matchesHKLM.Count -ne 1) { throw "Expected exactly 1 Uninstall entry, found $($matchesHKLM.Count)" }
+          $matchesHKLM = @(Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | Where-Object { $_.PSChildName -eq "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1" -or $_.GetValue("DisplayName") -like "FolkTool*" })
+          $matchesHKCU = @(Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | Where-Object { $_.PSChildName -eq "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}_is1" -or $_.GetValue("DisplayName") -like "FolkTool*" })
+          if ($matchesHKLM.Count -ne 1 -or $matchesHKCU.Count -ne 0) {
+            throw "Expected exactly 1 HKLM and 0 HKCU Uninstall entries, found HKLM=$($matchesHKLM.Count), HKCU=$($matchesHKCU.Count)"
+          }
 
-          Write-Host "=== 4. Running application + Clean Install verification ==="
+          Write-Host "=== 4. Insufficient-privileges check + Locked-file failure + Running app cross-dir Clean Install ==="
+          $deniedDir = "C:\Temp\FolkToolDeniedTarget"
+          New-Item -ItemType Directory -Force -Path $deniedDir | Out-Null
+          try {
+            & icacls $deniedDir /deny "$($env:USERNAME):(OI)(CI)(W,M,DC)" | Out-Null
+            $pDenied = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
+              -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$deniedDir`"" `
+              -Wait -PassThru
+            if ($pDenied.ExitCode -eq 0) {
+              throw "Setup reported exit 0 despite denied write permissions on $deniedDir!"
+            }
+            Write-Host "Verified insufficient-privilege install exit code: $($pDenied.ExitCode)"
+          } finally {
+            & icacls $deniedDir /reset /T 2>&1 | Out-Null
+            Remove-Item -LiteralPath $deniedDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $lockedFileStream = [System.IO.File]::Open((Join-Path $customDir "flutter_windows.dll"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+          try {
+            $pLocked = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
+              -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLEANINSTALL /ALLUSERS /DIR=`"$customDir`"" `
+              -Wait -PassThru
+            if ($pLocked.ExitCode -eq 0) {
+              throw "Clean install reported exit 0 despite exclusive file lock on flutter_windows.dll!"
+            }
+            Write-Host "Verified locked-file failure exit code: $($pLocked.ExitCode)"
+          } finally {
+            $lockedFileStream.Dispose()
+          }
+
           $runningProc = Assert-AppLaunchesInWorkingArea (Join-Path $customDir "FolkTool.exe")
           $pClean = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
-            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /CLEANINSTALL /ALLUSERS /DIR=`"$customDir`"" `
+            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /CLEANINSTALL /PURGEAPPDATA /ALLUSERS /DIR=`"$cleanDir`"" `
             -Wait -PassThru
           if ($pClean.ExitCode -ne 0) { throw "Clean install failed with $($pClean.ExitCode)" }
           $runningProc.Refresh()
@@ -479,15 +533,26 @@ jobs:
             Stop-Process -Id $runningProc.Id -Force
             throw "Installer failed to stop running FolkTool.exe prior to clean install!"
           }
-          Assert-InstalledFiles $customDir
-          if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Clean install deleted settings unexpectedly without /PURGEAPPDATA!" }
+          Assert-InstalledFiles $cleanDir
+          if (Test-Path (Join-Path $customDir "FolkTool.exe")) {
+            throw "Previous install dir still retains FolkTool.exe after cross-dir Clean Install!"
+          }
+          $settingsBackups = @(Get-ChildItem (Join-Path $docsRoot "backup") -Filter "settings_backup_*.json" -ErrorAction SilentlyContinue)
+          if ($settingsBackups.Count -lt 1) {
+            throw "Clean install with /PURGEAPPDATA failed to back up shared_preferences.json before reset!"
+          }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) { throw "Clean install deleted user boot/backup files!" }
 
+          # Re-seed user preferences after backup test so uninstall preserve vs purge can both be tested.
+          New-Item -ItemType Directory -Force -Path (Join-Path $appDataRoot "FolkTool") | Out-Null
+          '{"flutter.settings_confirm_flash":true}' | Out-File -FilePath (Join-Path $appDataRoot "FolkTool\shared_preferences.json") -Encoding utf8
+
           Write-Host "=== 5. Uninstall with live bundled adb.exe daemon & FolkTool.exe running (preserving user data) ==="
-          & (Join-Path $customDir "bin\adb.exe") start-server
-          $runningBeforeUninst = Assert-AppLaunchesInWorkingArea (Join-Path $customDir "FolkTool.exe")
+          $uninsExeClean = Join-Path $cleanDir "unins000.exe"
+          & (Join-Path $cleanDir "bin\adb.exe") start-server
+          $runningBeforeUninst = Assert-AppLaunchesInWorkingArea (Join-Path $cleanDir "FolkTool.exe")
           $uninstLog1 = (Join-Path $PWD "artifacts\uninstall-smoke.log")
-          $pUnins1 = Start-Process -FilePath $uninsExe1 -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$uninstLog1`"" -Wait -PassThru
+          $pUnins1 = Start-Process -FilePath $uninsExeClean -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$uninstLog1`"" -Wait -PassThru
           if ($pUnins1.ExitCode -ne 0) { throw "Uninstall failed with $($pUnins1.ExitCode)" }
           Start-Sleep -Seconds 2
           $runningBeforeUninst.Refresh()
@@ -495,15 +560,20 @@ jobs:
             Stop-Process -Id $runningBeforeUninst.Id -Force -ErrorAction SilentlyContinue
             throw "Uninstaller failed to terminate running FolkTool.exe!"
           }
-          if (Test-Path (Join-Path $customDir "FolkTool.exe")) { throw "FolkTool.exe still exists after uninstall!" }
-          if (Test-Path (Join-Path $customDir "bin\adb.exe")) { throw "bin\adb.exe remained locked after uninstall!" }
+          if (Test-Path (Join-Path $cleanDir "FolkTool.exe")) { throw "FolkTool.exe still exists after uninstall!" }
+          if (Test-Path (Join-Path $cleanDir "bin\adb.exe")) { throw "bin\adb.exe remained locked after uninstall!" }
+          if (Test-Path $appLnkPath) { throw "Start Menu shortcut remained after uninstall!" }
           if (Test-Path $regPath) { throw "Uninstall registry key still exists!" }
           if (-not (Test-Path (Join-Path $appDataRoot "FolkTool\shared_preferences.json"))) { throw "Standard uninstall deleted settings!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup) -or -not (Test-Path $userLog)) {
             throw "Standard uninstall deleted user files or logs!"
           }
 
-          Write-Host "=== 6. Reinstall after uninstall -> Uninstall with /PURGEAPPDATA ==="
+          Write-Host "=== 6. Reinstall after uninstall -> Uninstall with /PURGEAPPDATA + temp cleanup ==="
+          $orphanTemp = Join-Path $env:TEMP "folkpatch_smoke_orphan"
+          New-Item -ItemType Directory -Force -Path $orphanTemp | Out-Null
+          "temp" | Out-File -FilePath (Join-Path $orphanTemp "kernel") -Encoding ascii
+
           $pReinstall = Start-Process -FilePath "installer\FolkTool-Setup.exe" `
             -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /DIR=`"$defaultDir`"" `
             -Wait -PassThru
@@ -519,6 +589,7 @@ jobs:
           if (Test-Path (Join-Path $defaultDir "FolkTool.exe")) { throw "FolkTool.exe still exists after purge uninstall!" }
           if (Test-Path $appDataRoot) { throw "AppData settings were not cleaned on /PURGEAPPDATA!" }
           if (Test-Path $userLog) { throw "Log file was not cleaned on /PURGEAPPDATA!" }
+          if (Test-Path $orphanTemp) { throw "Orphaned folkpatch_* temp dir was not cleaned on uninstall!" }
           if (-not (Test-Path $userPatched) -or -not (Test-Path $userBackup)) {
             throw "/PURGEAPPDATA must NEVER delete user patched/backup boot images!"
           }
@@ -541,6 +612,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "artifacts\portable" | Out-Null
           Copy-Item -Recurse -Force "build\windows\x64\runner\Release\*" "artifacts\portable\"
           Copy-Item -Recurse -Force "bin" "artifacts\portable\bin"
+          Remove-Item -LiteralPath "artifacts\portable\bin\7za.exe" -Force -ErrorAction SilentlyContinue
           Copy-Item -Recurse -Force "apk" "artifacts\portable\apk"
           Copy-Item -Recurse -Force "assets" "artifacts\portable\assets"
           Copy-Item -Recurse -Force "kp_versions" "artifacts\portable\kp_versions"
