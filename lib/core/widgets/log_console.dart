@@ -32,7 +32,6 @@ class _LogConsoleState extends State<LogConsole> {
   late bool _autoScrollEnabled;
   final Set<int> _expandedEntryHashes = {};
 
-  // Memoized filter cache to avoid re-scanning large log lists on UI toggles.
   List<LogEntry>? _cachedFiltered;
   int _cachedSourceLength = -1;
   LogEntry? _cachedLastEntry;
@@ -113,21 +112,20 @@ class _LogConsoleState extends State<LogConsole> {
 
   Future<void> _confirmClear(BuildContext context) async {
     if (widget.onClear == null) return;
+    final l10n = S.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Clear Logs?'),
-        content: const Text(
-          'This will clear the visible operation log entries for the current session.',
-        ),
+        title: Text(l10n.clearLogsDialogTitle),
+        content: Text(l10n.clearLogsDialogBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Clear'),
+            child: Text(l10n.clear),
           ),
         ],
       ),
@@ -169,33 +167,30 @@ class _LogConsoleState extends State<LogConsole> {
     AppSemanticColors semantic,
   ) {
     final selected = _levelFilter == level;
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: InkWell(
-        onTap: () => setState(() => _levelFilter = level),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-          decoration: BoxDecoration(
+    return InkWell(
+      onTap: () => setState(() => _levelFilter = level),
+      borderRadius: BorderRadius.circular(AppRadius.xs),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: selected
+              ? semantic.terminalForeground.withValues(alpha: 0.14)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+          border: Border.all(
             color: selected
-                ? semantic.terminalForeground.withValues(alpha: 0.14)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(AppRadius.xs),
-            border: Border.all(
-              color: selected
-                  ? semantic.terminalForeground.withValues(alpha: 0.3)
-                  : semantic.terminalForeground.withValues(alpha: 0.12),
-            ),
+                ? semantic.terminalForeground.withValues(alpha: 0.3)
+                : semantic.terminalForeground.withValues(alpha: 0.12),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected
-                  ? semantic.terminalForeground
-                  : semantic.terminalForeground.withValues(alpha: 0.6),
-              fontSize: 10.5,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected
+                ? semantic.terminalForeground
+                : semantic.terminalForeground.withValues(alpha: 0.6),
+            fontSize: 10.5,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
           ),
         ),
       ),
@@ -231,12 +226,15 @@ class _LogConsoleState extends State<LogConsole> {
                 children: [
                   Icon(Icons.terminal, color: muted, size: 16),
                   const SizedBox(width: 8),
-                  Text(
-                    l10n.logOutput,
-                    style: TextStyle(
-                      color: semantic.terminalForeground,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                  Flexible(
+                    child: Text(
+                      l10n.logOutput,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: semantic.terminalForeground,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -262,9 +260,6 @@ class _LogConsoleState extends State<LogConsole> {
                       size: 16,
                       color: _autoScrollEnabled ? semantic.success : muted,
                     ),
-                    tooltip: _autoScrollEnabled
-                        ? 'Auto-scroll On'
-                        : 'Auto-scroll Off',
                     onPressed: () => setState(
                         () => _autoScrollEnabled = !_autoScrollEnabled),
                     padding: const EdgeInsets.all(4),
@@ -284,7 +279,7 @@ class _LogConsoleState extends State<LogConsole> {
                       IconButton(
                         icon: Icon(Icons.download_outlined,
                             size: 16, color: muted),
-                        tooltip: 'Export Logs',
+                        tooltip: l10n.exportLogs,
                         onPressed: widget.onExport,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
@@ -307,6 +302,7 @@ class _LogConsoleState extends State<LogConsole> {
             ),
             if (widget.logs.isNotEmpty)
               Container(
+                width: double.infinity,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
@@ -318,65 +314,89 @@ class _LogConsoleState extends State<LogConsole> {
                     ),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 26,
-                        child: TextField(
-                          controller: _searchController,
-                          onChanged: (v) => setState(() => _searchQuery = v),
-                          style: TextStyle(
-                            color: semantic.terminalForeground,
-                            fontSize: 11.5,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'Filter logs...',
-                            hintStyle: TextStyle(color: muted, fontSize: 11),
-                            prefixIcon:
-                                Icon(Icons.search, size: 14, color: muted),
-                            suffixIcon: _searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(Icons.close,
-                                        size: 13, color: muted),
-                                    padding: EdgeInsets.zero,
-                                    onPressed: () {
-                                      _searchController.clear();
-                                      setState(() => _searchQuery = '');
-                                    },
-                                  )
-                                : null,
-                            isDense: true,
-                            contentPadding:
-                                const EdgeInsets.symmetric(vertical: 4),
-                            filled: true,
-                            fillColor: semantic.terminalForeground
-                                .withValues(alpha: 0.06),
-                            border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.xs),
-                              borderSide: BorderSide.none,
-                            ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 460;
+                    final searchBox = SizedBox(
+                      height: 26,
+                      width: compact ? constraints.maxWidth : 210,
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                        style: TextStyle(
+                          color: semantic.terminalForeground,
+                          fontSize: 11.5,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: l10n.filterLogsHint,
+                          hintStyle: TextStyle(color: muted, fontSize: 11),
+                          prefixIcon:
+                              Icon(Icons.search, size: 14, color: muted),
+                          suffixIcon: _searchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: Icon(Icons.close,
+                                      size: 13, color: muted),
+                                  padding: EdgeInsets.zero,
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
+                                )
+                              : null,
+                          isDense: true,
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 4),
+                          filled: true,
+                          fillColor: semantic.terminalForeground
+                              .withValues(alpha: 0.06),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(AppRadius.xs),
+                            borderSide: BorderSide.none,
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    _buildLevelFilterChip('All', null, semantic),
-                    _buildLevelFilterChip('Info', LogLevel.info, semantic),
-                    _buildLevelFilterChip('OK', LogLevel.success, semantic),
-                    _buildLevelFilterChip('Warn', LogLevel.warning, semantic),
-                    _buildLevelFilterChip('Err', LogLevel.error, semantic),
-                  ],
+                    );
+                    final chips = Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        _buildLevelFilterChip(l10n.filterAll, null, semantic),
+                        _buildLevelFilterChip(
+                            l10n.filterInfo, LogLevel.info, semantic),
+                        _buildLevelFilterChip(
+                            l10n.filterOk, LogLevel.success, semantic),
+                        _buildLevelFilterChip(
+                            l10n.filterWarn, LogLevel.warning, semantic),
+                        _buildLevelFilterChip(
+                            l10n.filterErr, LogLevel.error, semantic),
+                      ],
+                    );
+
+                    if (compact) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          searchBox,
+                          const SizedBox(height: 6),
+                          chips,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: searchBox),
+                        const SizedBox(width: 8),
+                        chips,
+                      ],
+                    );
+                  },
                 ),
               ),
             Expanded(
               child: visibleLogs.isEmpty
                   ? Center(
                       child: Text(
-                        widget.logs.isEmpty
-                            ? l10n.noLogs
-                            : 'No logs match the current filter.',
+                        l10n.noLogs,
                         style: TextStyle(color: muted, fontSize: 12),
                       ),
                     )
@@ -430,9 +450,6 @@ class _LogConsoleState extends State<LogConsole> {
                                         size: 14,
                                         color: muted,
                                       ),
-                                      tooltip: isExpanded
-                                          ? 'Hide Technical Details'
-                                          : 'Show Technical Details',
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(
                                         minWidth: 22,
