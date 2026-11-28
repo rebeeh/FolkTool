@@ -51,3 +51,6 @@ artifacts/
 redist/
 windows/flutter/ephemeral/
 .claude
+
+# Local static UI/UX preview (generated locally, never committed)
+tooling/ui-preview.html

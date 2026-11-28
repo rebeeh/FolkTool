@@ -20,7 +20,23 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
-# Add preprocessor definitions for the build version.
+# Add preprocessor definitions for the build version (never allow empty numeric fields).
+if(NOT DEFINED FLUTTER_VERSION_MAJOR OR "${FLUTTER_VERSION_MAJOR}" STREQUAL "")
+  set(FLUTTER_VERSION_MAJOR "1")
+endif()
+if(NOT DEFINED FLUTTER_VERSION_MINOR OR "${FLUTTER_VERSION_MINOR}" STREQUAL "")
+  set(FLUTTER_VERSION_MINOR "7")
+endif()
+if(NOT DEFINED FLUTTER_VERSION_PATCH OR "${FLUTTER_VERSION_PATCH}" STREQUAL "")
+  set(FLUTTER_VERSION_PATCH "0")
+endif()
+if(NOT DEFINED FLUTTER_VERSION_BUILD OR "${FLUTTER_VERSION_BUILD}" STREQUAL "")
+  set(FLUTTER_VERSION_BUILD "0")
+endif()
+if(NOT DEFINED FLUTTER_VERSION OR "${FLUTTER_VERSION}" STREQUAL "")
+  set(FLUTTER_VERSION "${FLUTTER_VERSION_MAJOR}.${FLUTTER_VERSION_MINOR}.${FLUTTER_VERSION_PATCH}+${FLUTTER_VERSION_BUILD}")
+endif()
+
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MINOR=${FLUTTER_VERSION_MINOR}")

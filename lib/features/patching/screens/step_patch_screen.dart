@@ -41,7 +41,8 @@ class _StepPatchScreenState extends State<StepPatchScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<VersionProvider>().loadVersions();
+      if (!mounted) return;
+      context.read<VersionProvider>().ensureLoaded();
     });
   }
 
@@ -77,6 +78,7 @@ class _StepPatchScreenState extends State<StepPatchScreen> {
   }
 
   Future<void> _exportDiagnostics(BuildContext context) async {
+    final l10n = S.of(context);
     final patchProvider = context.read<PatchProvider>();
     final device = context.read<DeviceProvider>().currentDevice;
     final redact = context.read<SettingsProvider>().redactDiagnostics;
@@ -86,7 +88,7 @@ class _StepPatchScreenState extends State<StepPatchScreen> {
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Diagnostics saved: $path')),
+        SnackBar(content: Text(l10n.diagnosticsSaved(path))),
       );
     }
   }

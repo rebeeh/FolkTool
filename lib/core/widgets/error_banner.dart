@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../generated/l10n.dart';
 import '../config/app_semantic_colors.dart';
 import '../errors/app_error.dart';
 
@@ -22,6 +23,7 @@ class ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = S.of(context);
     final colorScheme = theme.colorScheme;
     final semantic = context.semantic;
 
@@ -37,35 +39,42 @@ class ErrorBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Icon(
-                error.deviceSafe
-                    ? Icons.error_outline_rounded
-                    : Icons.warning_amber_rounded,
-                color: colorScheme.error,
-                size: 20,
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Text(
-                  error.title,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: colorScheme.onErrorContainer,
-                    fontWeight: FontWeight.w600,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    error.deviceSafe
+                        ? Icons.error_outline_rounded
+                        : Icons.warning_amber_rounded,
+                    color: colorScheme.error,
+                    size: 20,
                   ),
-                ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Flexible(
+                    child: Text(
+                      error.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: colorScheme.onErrorContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               _Badge(
                 label: error.categoryName,
                 backgroundColor: colorScheme.error.withValues(alpha: 0.14),
                 foregroundColor: colorScheme.error,
               ),
-              const SizedBox(width: AppSpacing.xs),
               _Badge(
                 label: error.deviceSafe
-                    ? 'Device Safe'
-                    : 'Check Device State',
+                    ? l10n.deviceSafeBadge
+                    : l10n.checkDeviceStateBadge,
                 backgroundColor: (error.deviceSafe
                         ? semantic.success
                         : colorScheme.error)
@@ -85,7 +94,7 @@ class ErrorBanner extends StatelessWidget {
           if (error.reason != null && error.reason!.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Why: ${error.reason}',
+              l10n.errorWhy(error.reason!),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onErrorContainer.withValues(alpha: 0.85),
               ),
@@ -95,7 +104,7 @@ class ErrorBanner extends StatelessWidget {
               error.affectedStage!.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Stage: ${error.affectedStage}',
+              l10n.errorStage(error.affectedStage!),
               style: theme.textTheme.labelSmall?.copyWith(
                 color: colorScheme.onErrorContainer.withValues(alpha: 0.75),
               ),
@@ -140,30 +149,28 @@ class ErrorBanner extends StatelessWidget {
                     ClipboardData(text: error.toClipboardText()),
                   );
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Error details copied to clipboard'),
-                    ),
+                    SnackBar(content: Text(l10n.errorDetailsCopied)),
                   );
                 },
                 icon: const Icon(Icons.copy, size: 15),
-                label: const Text('Copy Details'),
+                label: Text(l10n.copyDetails),
               ),
               if (onViewLogs != null)
                 OutlinedButton.icon(
                   onPressed: onViewLogs,
                   icon: const Icon(Icons.article_outlined, size: 15),
-                  label: const Text('View Logs'),
+                  label: Text(l10n.viewLogs),
                 ),
               if (error.canSafelyRetry && onRetry != null)
                 FilledButton.icon(
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh, size: 15),
-                  label: const Text('Retry'),
+                  label: Text(l10n.retry),
                 ),
               if (onDismiss != null)
                 TextButton(
                   onPressed: onDismiss,
-                  child: const Text('Dismiss'),
+                  child: Text(l10n.dismiss),
                 ),
             ],
           ),

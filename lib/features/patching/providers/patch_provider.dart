@@ -2,8 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_error.dart';
+import '../../../core/l10n/l10n_helper.dart';
 import '../../../core/logging/log_entry.dart';
-import '../../../generated/l10n.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 import '../../device/models/device_info.dart';
 import '../../device/providers/device_provider.dart';
 import '../../device/services/device_service.dart';
@@ -15,7 +16,7 @@ import 'version_provider.dart';
 
 enum PatchOperationState { idle, running, completed, failed, cancelled }
 
-class PatchProvider extends ChangeNotifier {
+class PatchProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   final KpToolsService _kptoolsService;
   final FileService _fileService;
   final SafetyService _safetyService;
@@ -190,21 +191,23 @@ class PatchProvider extends ChangeNotifier {
     VersionProvider versionProvider,
   ) async {
     if (isRunning) return;
+    final l10n = appL10n;
 
     if (_selectedFilePath == null) {
       _failWithError(AppError(
         category: AppErrorCategory.file,
-        title: 'No Boot Image Selected',
-        message: S.current.errSelectBootFirst,
+        title: l10n.errTitleNoBootSelected,
+        message: l10n.errSelectBootFirst,
         affectedStage: 'Preflight',
         deviceSafe: true,
-        nextSteps: 'Select a valid boot.img file first.',
+        nextSteps: l10n.errNextSelectBoot,
         canSafelyRetry: true,
       ));
       return;
     }
 
     final targetDevice = deviceProvider.selectedTargetDevice;
+    final selectedVer = versionProvider.selectedVersion;
     _activeDeviceSerial = targetDevice?.serial;
     _operationId = generateOperationId();
     _operationState = PatchOperationState.running;
@@ -227,8 +230,10 @@ class PatchProvider extends ChangeNotifier {
 
       final preflight = await _safetyService.runPreflightChecks(
         bootImagePath: _selectedFilePath!,
-        kpimgPath: versionProvider.selectedVersion?.kpimgPath ??
-            AppConfig.fallbackKpimgPath,
+        kpimgPath: selectedVer?.kpimgPath ?? AppConfig.fallbackKpimgPath,
+        kptoolsPathOverride: selectedVer?.kptoolsPath,
+        minKernel: selectedVer?.minKernel ?? '3.18',
+        maxKernel: selectedVer?.maxKernel ?? '6.15',
         kpmModules: _selectedKpmModules.toList(growable: false),
         deviceInfo: targetDevice,
         batteryLevel: targetDevice?.batteryLevel,
@@ -246,11 +251,11 @@ class PatchProvider extends ChangeNotifier {
           preflight.primaryError ??
               AppError(
                 category: AppErrorCategory.imageValidation,
-                title: 'Preflight Check Failed',
+                title: l10n.errTitlePreflightFailed,
                 message: msg,
                 affectedStage: 'Preflight',
                 deviceSafe: true,
-                nextSteps: 'Resolve the reported issue and try again.',
+                nextSteps: l10n.errNextPreflightFailed,
                 canSafelyRetry: true,
               ),
         );
@@ -269,7 +274,7 @@ class PatchProvider extends ChangeNotifier {
       _phase = FlashingPhase.preparation;
       _currentStepIndex = 1;
       _updateStepStatus(1, StepStatus.inProgress);
-      _addLog(LogLevel.info, S.current.logBackingUpBoot);
+      _addLog(LogLevel.info, l10n.logBackingUpBoot);
 
       final backupDir = await _fileService.getBackupDirectory();
       final timestamp = DateTime.now()
@@ -286,10 +291,10 @@ class PatchProvider extends ChangeNotifier {
         );
         if (backupSuccess) {
           _backupFilePath = backupPath;
-          _addLog(LogLevel.success, S.current.logBackupComplete(backupPath));
+          _addLog(LogLevel.success, l10n.logBackupComplete(backupPath));
           _updateStepStatus(1, StepStatus.completed);
         } else {
-          _addLog(LogLevel.warning, S.current.logBackupFailed);
+          _addLog(LogLevel.warning, l10n.logBackupFailed);
           _updateStepStatus(1, StepStatus.completed);
         }
       } else {
@@ -297,9 +302,9 @@ class PatchProvider extends ChangeNotifier {
           _backupFilePath = await _fileService.backupBootImage(
             _selectedFilePath!,
           );
-          _addLog(LogLevel.info, S.current.logBackupComplete(_backupFilePath!));
+          _addLog(LogLevel.info, l10n.logBackupComplete(_backupFilePath!));
         } catch (_) {
-          _addLog(LogLevel.warning, S.current.logDeviceNotFastboot);
+          _addLog(LogLevel.warning, l10n.logDeviceNotFastboot);
         }
         _updateStepStatus(1, StepStatus.completed);
       }
@@ -314,7 +319,7 @@ class PatchProvider extends ChangeNotifier {
       _phase = FlashingPhase.patching;
       _currentStepIndex = 2;
       _updateStepStatus(2, StepStatus.inProgress);
-      _addLog(LogLevel.info, S.current.logPatchingBoot);
+      _addLog(LogLevel.info, l10n.logPatchingBoot);
 
       final outputDir = await _fileService.getOutputDirectory();
       _patchedFilePath = p.join(outputDir, 'boot_patched_$timestamp.img');
@@ -323,7 +328,7 @@ class PatchProvider extends ChangeNotifier {
         inputPath: _selectedFilePath!,
         outputPath: _patchedFilePath!,
         kpmModules: _selectedKpmModules.toList(),
-        kpVersion: versionProvider.selectedVersion,
+        kpVersion: selectedVer,
         onLog: (line) => _addLog(LogLevel.info, line),
       );
 
@@ -335,20 +340,18 @@ class PatchProvider extends ChangeNotifier {
         );
         _failWithError(AppError(
           category: AppErrorCategory.process,
-          title: 'Boot Image Patching Failed',
-          message: patchResult.errorMessage ??
-              'kptools failed to patch the boot image.',
+          title: l10n.errTitlePatchFailed,
+          message: patchResult.errorMessage ?? l10n.errTitlePatchFailed,
           affectedStage: 'Patching',
           deviceSafe: true,
-          nextSteps:
-              'Your device has not been modified. Verify your boot.img and KernelPatch version.',
+          nextSteps: l10n.errNextPatchFailed,
           canSafelyRetry: true,
           technicalDetails: patchResult.errorMessage,
         ));
         return;
       }
 
-      _addLog(LogLevel.success, S.current.logPatchComplete(_patchedFilePath!));
+      _addLog(LogLevel.success, l10n.logPatchComplete(_patchedFilePath!));
       _updateStepStatus(2, StepStatus.completed);
 
       if (_isCancelling) {
@@ -361,13 +364,13 @@ class PatchProvider extends ChangeNotifier {
       _phase = FlashingPhase.validation;
       _currentStepIndex = 3;
       _updateStepStatus(3, StepStatus.inProgress);
-      _addLog(LogLevel.info, S.current.logSavingFile);
+      _addLog(LogLevel.info, l10n.logSavingFile);
 
       final savedPath = await _fileService.savePatchedImage(
         _patchedFilePath!,
         customName: 'boot_patched_$timestamp.img',
       );
-      _addLog(LogLevel.success, S.current.logFileSaved(savedPath));
+      _addLog(LogLevel.success, l10n.logFileSaved(savedPath));
       _updateStepStatus(3, StepStatus.completed);
 
       if (_isCancelling) {
@@ -381,8 +384,16 @@ class PatchProvider extends ChangeNotifier {
       _currentStepIndex = 4;
       _updateStepStatus(4, StepStatus.inProgress);
 
-      if (!deviceProvider.hasAdbDevice) {
-        _addLog(LogLevel.warning, S.current.logNoAdbDevice);
+      if (deviceProvider.hasFastbootDevice) {
+        _addLog(LogLevel.success, l10n.logDeviceInFastboot);
+      } else if (deviceProvider.hasAdbDevice) {
+        _addLog(LogLevel.info, l10n.logRebootingToFastboot);
+        final rebootSuccess = await deviceProvider.rebootToFastboot();
+        if (!rebootSuccess) {
+          _addLog(LogLevel.warning, l10n.logAutoRebootFailed);
+        }
+      } else {
+        _addLog(LogLevel.warning, l10n.logNoAdbDevice);
 
         for (int i = 0; i < 30; i++) {
           await Future.delayed(const Duration(seconds: 2));
@@ -392,27 +403,23 @@ class PatchProvider extends ChangeNotifier {
             notifyListeners();
             return;
           }
-          await deviceProvider.manualRefreshDevices();
+          await deviceProvider.pollDuringOperation();
           if (deviceProvider.hasFastbootDevice) {
             break;
           }
-        }
-      } else {
-        _addLog(LogLevel.info, S.current.logRebootingToFastboot);
-        final rebootSuccess = await deviceProvider.rebootToFastboot();
-        if (!rebootSuccess) {
-          _addLog(LogLevel.warning, S.current.logAutoRebootFailed);
         }
       }
 
       _phase = FlashingPhase.fastbootDetection;
       if (!deviceProvider.hasFastbootDevice) {
-        final found = await deviceProvider.waitForFastboot();
+        final found = await deviceProvider.waitForFastboot(
+          expectedSerial: _activeDeviceSerial,
+        );
         if (!found) {
           _updateStepStatus(
             4,
             StepStatus.failed,
-            errorMessage: S.current.logWaitFastbootTimeout,
+            errorMessage: l10n.logWaitFastbootTimeout,
           );
           final rawAdbErr = deviceProvider.lastRawError;
           if (rawAdbErr != null && rawAdbErr.isNotEmpty) {
@@ -423,15 +430,13 @@ class PatchProvider extends ChangeNotifier {
               ),
             );
           } else {
-            _failWithError(const AppError(
+            _failWithError(AppError(
               category: AppErrorCategory.fastboot,
-              title: 'Fastboot Device Not Detected',
-              message:
-                  'Timed out waiting for the device to appear in Fastboot mode.',
+              title: l10n.errTitleFastbootTimeout,
+              message: l10n.errMsgFastbootTimeout,
               affectedStage: 'Fastboot Detection',
               deviceSafe: true,
-              nextSteps:
-                  'Check USB cable, install Fastboot/Samsung drivers if needed, and verify device is in bootloader mode.',
+              nextSteps: l10n.errNextFastbootTimeout,
               canSafelyRetry: true,
             ));
           }
@@ -439,7 +444,7 @@ class PatchProvider extends ChangeNotifier {
         }
       }
 
-      _addLog(LogLevel.success, S.current.logDeviceInFastboot);
+      _addLog(LogLevel.success, l10n.logDeviceInFastboot);
       _updateStepStatus(4, StepStatus.completed);
 
       if (_isCancelling) {
@@ -459,7 +464,7 @@ class PatchProvider extends ChangeNotifier {
       _phase = FlashingPhase.flashing;
       _currentStepIndex = 5;
       _updateStepStatus(5, StepStatus.inProgress);
-      _addLog(LogLevel.info, S.current.logFlashingBoot);
+      _addLog(LogLevel.info, l10n.logFlashingBoot);
       await _persistSessionLogs();
 
       final flashSuccess = await deviceProvider.flashBoot(
@@ -471,10 +476,10 @@ class PatchProvider extends ChangeNotifier {
         _updateStepStatus(
           5,
           StepStatus.failed,
-          errorMessage: S.current.logFlashFailed,
+          errorMessage: l10n.logFlashFailed,
         );
         final rawFlashErr = deviceProvider.lastRawError ??
-            (_logs.isNotEmpty ? _logs.last.message : S.current.errFlashBootFailed);
+            (_logs.isNotEmpty ? _logs.last.message : l10n.errFlashBootFailed);
         final classified = DeviceService.classifyFastbootError(
           rawFlashErr,
           stage: 'Flashing',
@@ -492,7 +497,7 @@ class PatchProvider extends ChangeNotifier {
         return;
       }
 
-      _addLog(LogLevel.success, S.current.logFlashSuccess);
+      _addLog(LogLevel.success, l10n.logFlashSuccess);
       _updateStepStatus(5, StepStatus.completed);
 
       if (_isCancelling) {
@@ -505,7 +510,7 @@ class PatchProvider extends ChangeNotifier {
       _phase = FlashingPhase.rebootingToSystem;
       _currentStepIndex = 6;
       _updateStepStatus(6, StepStatus.inProgress);
-      _addLog(LogLevel.info, S.current.logRebootingDevice);
+      _addLog(LogLevel.info, l10n.logRebootingDevice);
 
       await Future.delayed(const Duration(seconds: 2));
       final rebootSuccess = await deviceProvider.rebootDevice(
@@ -514,26 +519,26 @@ class PatchProvider extends ChangeNotifier {
 
       _phase = FlashingPhase.verification;
       if (rebootSuccess) {
-        _addLog(LogLevel.success, S.current.logRebootSuccess);
+        _addLog(LogLevel.success, l10n.logRebootSuccess);
       } else {
-        _addLog(LogLevel.warning, S.current.logAutoRebootFailed2);
+        _addLog(LogLevel.warning, l10n.logAutoRebootFailed2);
       }
       _updateStepStatus(6, StepStatus.completed);
 
       _phase = FlashingPhase.completed;
       _operationState = PatchOperationState.completed;
-      _addLog(LogLevel.success, S.current.logOneClickComplete);
+      _addLog(LogLevel.success, l10n.logOneClickComplete);
       await _persistSessionLogs();
       notifyListeners();
     } catch (e) {
       _failWithError(
         AppError(
           category: AppErrorCategory.application,
-          title: 'Unexpected Operation Error',
+          title: l10n.errTitleUnexpected,
           message: e.toString(),
           affectedStage: _phase.name,
           deviceSafe: _phase != FlashingPhase.flashing,
-          nextSteps: 'Export diagnostics and inspect logs before retrying.',
+          nextSteps: l10n.errNextUnexpected,
           canSafelyRetry: _phase != FlashingPhase.flashing,
           technicalDetails: e.toString(),
         ),
@@ -548,20 +553,22 @@ class PatchProvider extends ChangeNotifier {
 
   Future<bool> patchOnly(VersionProvider versionProvider) async {
     if (isRunning) return false;
+    final l10n = appL10n;
 
     if (_selectedFilePath == null) {
       _failWithError(AppError(
         category: AppErrorCategory.file,
-        title: 'No Boot Image Selected',
-        message: S.current.errSelectBootFirst,
+        title: l10n.errTitleNoBootSelected,
+        message: l10n.errSelectBootFirst,
         affectedStage: 'Preflight',
         deviceSafe: true,
-        nextSteps: 'Select a valid boot.img file first.',
+        nextSteps: l10n.errNextSelectBoot,
         canSafelyRetry: true,
       ));
       return false;
     }
 
+    final selectedVer = versionProvider.selectedVersion;
     _operationId = generateOperationId();
     _operationState = PatchOperationState.running;
     _phase = FlashingPhase.preflight;
@@ -570,13 +577,15 @@ class PatchProvider extends ChangeNotifier {
     _lastError = null;
     notifyListeners();
 
-    _addLog(LogLevel.info, S.current.logStartPatching);
+    _addLog(LogLevel.info, l10n.logStartPatching);
 
     try {
       final preflight = await _safetyService.runPreflightChecks(
         bootImagePath: _selectedFilePath!,
-        kpimgPath: versionProvider.selectedVersion?.kpimgPath ??
-            AppConfig.fallbackKpimgPath,
+        kpimgPath: selectedVer?.kpimgPath ?? AppConfig.fallbackKpimgPath,
+        kptoolsPathOverride: selectedVer?.kptoolsPath,
+        minKernel: selectedVer?.minKernel ?? '3.18',
+        maxKernel: selectedVer?.maxKernel ?? '6.15',
         kpmModules: _selectedKpmModules.toList(growable: false),
         checkImageMagic: true,
         requireConnectedDevice: false,
@@ -589,11 +598,11 @@ class PatchProvider extends ChangeNotifier {
           preflight.primaryError ??
               AppError(
                 category: AppErrorCategory.imageValidation,
-                title: 'Preflight Check Failed',
+                title: l10n.errTitlePreflightFailed,
                 message: preflight.errors.join('; '),
                 affectedStage: 'Preflight',
                 deviceSafe: true,
-                nextSteps: 'Verify your boot.img file and try again.',
+                nextSteps: l10n.errNextPreflightFailed,
                 canSafelyRetry: true,
               ),
         );
@@ -613,7 +622,7 @@ class PatchProvider extends ChangeNotifier {
         inputPath: _selectedFilePath!,
         outputPath: _patchedFilePath!,
         kpmModules: _selectedKpmModules.toList(),
-        kpVersion: versionProvider.selectedVersion,
+        kpVersion: selectedVer,
         onLog: (line) => _addLog(LogLevel.info, line),
       );
 
@@ -622,7 +631,7 @@ class PatchProvider extends ChangeNotifier {
         _operationState = PatchOperationState.completed;
         _addLog(
           LogLevel.success,
-          S.current.logPatchComplete(_patchedFilePath!),
+          l10n.logPatchComplete(_patchedFilePath!),
         );
         await _persistSessionLogs();
         notifyListeners();
@@ -630,12 +639,11 @@ class PatchProvider extends ChangeNotifier {
       } else {
         _failWithError(AppError(
           category: AppErrorCategory.process,
-          title: 'Boot Image Patching Failed',
-          message:
-              result.errorMessage ?? 'kptools failed to patch the boot image.',
+          title: l10n.errTitlePatchFailed,
+          message: result.errorMessage ?? l10n.errTitlePatchFailed,
           affectedStage: 'Patching',
           deviceSafe: true,
-          nextSteps: 'Verify your boot.img and KernelPatch version.',
+          nextSteps: l10n.errNextPatchFailed,
           canSafelyRetry: true,
           technicalDetails: result.errorMessage,
         ));
@@ -644,11 +652,11 @@ class PatchProvider extends ChangeNotifier {
     } catch (e) {
       _failWithError(AppError(
         category: AppErrorCategory.process,
-        title: 'Patching Error',
-        message: S.current.logPatchException(e),
+        title: l10n.errTitlePatchFailed,
+        message: l10n.logPatchException(e),
         affectedStage: 'Patching',
         deviceSafe: true,
-        nextSteps: 'Inspect the logs and try again.',
+        nextSteps: l10n.errNextUnexpected,
         canSafelyRetry: true,
         technicalDetails: e.toString(),
       ));
@@ -658,7 +666,7 @@ class PatchProvider extends ChangeNotifier {
 
   void cancelOperation() {
     _isCancelling = true;
-    _addLog(LogLevel.warning, S.current.logCancelling);
+    _addLog(LogLevel.warning, appL10n.logCancelling);
     notifyListeners();
   }
 
@@ -699,6 +707,7 @@ class PatchProvider extends ChangeNotifier {
     if (isRunning) return false;
     final imagePath = _patchedFilePath;
     if (imagePath == null) return false;
+    final l10n = appL10n;
 
     _activeDeviceSerial = deviceProvider.selectedTargetDevice?.serial;
     _operationId = generateOperationId();
@@ -707,7 +716,7 @@ class PatchProvider extends ChangeNotifier {
     _errorMessage = null;
     _lastError = null;
     deviceProvider.setOperationLocked(true);
-    _addLog(LogLevel.info, S.current.logFlashingBoot);
+    _addLog(LogLevel.info, l10n.logFlashingBoot);
     await _persistSessionLogs();
     notifyListeners();
 
@@ -718,7 +727,7 @@ class PatchProvider extends ChangeNotifier {
       );
       if (!ok) {
         final rawErr = deviceProvider.lastRawError ??
-            (_logs.isNotEmpty ? _logs.last.message : S.current.errFlashBootFailed);
+            (_logs.isNotEmpty ? _logs.last.message : l10n.errFlashBootFailed);
         final classified = DeviceService.classifyFastbootError(
           rawErr,
           stage: 'Step Flash',
@@ -737,7 +746,7 @@ class PatchProvider extends ChangeNotifier {
       }
       _phase = FlashingPhase.completed;
       _operationState = PatchOperationState.completed;
-      _addLog(LogLevel.success, S.current.logFlashSuccess);
+      _addLog(LogLevel.success, l10n.logFlashSuccess);
       await _persistSessionLogs();
       notifyListeners();
       return true;
@@ -748,21 +757,20 @@ class PatchProvider extends ChangeNotifier {
 
   /// Flashes the backed-up stock boot image back to the device in fastboot mode.
   Future<bool> restoreStockBoot(DeviceProvider deviceProvider) async {
+    final l10n = appL10n;
     final backupPath = _backupFilePath;
     if (backupPath == null) {
-      _addLog(LogLevel.error, 'No stock boot backup available to restore.');
+      _addLog(LogLevel.error, l10n.errTitleBootNotFound);
       return false;
     }
-    _addLog(LogLevel.info, 'Restoring stock boot image from $backupPath...');
+    _addLog(LogLevel.info, l10n.logFlashingBootPath(backupPath));
     final ok = await deviceProvider.flashBoot(
       backupPath,
       onLog: (line) => _addLog(LogLevel.info, line),
     );
     _addLog(
       ok ? LogLevel.success : LogLevel.error,
-      ok
-          ? 'Stock boot image restored.'
-          : 'Failed to restore stock boot image.',
+      ok ? l10n.restoreStockBootSuccess : l10n.restoreStockBootFailed,
     );
     return ok;
   }

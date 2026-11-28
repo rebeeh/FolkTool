@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/config/app_semantic_colors.dart';
 import '../../../generated/l10n.dart';
+import '../../patching/models/patch_target.dart';
+import '../../patching/providers/version_provider.dart';
 import '../providers/device_provider.dart';
 
 class ClientCheckCard extends StatefulWidget {
@@ -27,6 +30,18 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
   Widget build(BuildContext context) {
     final l10n = S.of(context);
     final colorScheme = Theme.of(context).colorScheme;
+    VersionProvider? versionProvider;
+    try {
+      versionProvider = Provider.of<VersionProvider>(context);
+    } catch (_) {
+      versionProvider = null;
+    }
+    final apatchSummary = versionProvider
+        ?.summaryForTarget(PatchTarget.apatch)
+        ?.latestManagerVersion;
+    final folkpatchSummary = versionProvider
+        ?.summaryForTarget(PatchTarget.folkpatch)
+        ?.latestManagerVersion;
 
     return Selector<
         DeviceProvider,
@@ -65,15 +80,16 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
                                 color: colorScheme.primary,
                               ),
                               const SizedBox(width: 8),
-                              Text(
-                                l10n.clientCheck,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: colorScheme.onSurface,
+                              Expanded(
+                                child: Text(
+                                  l10n.clientCheck,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
-                              const Spacer(),
                               SizedBox(
                                 height: 32,
                                 child: state.manualChecking
@@ -112,6 +128,8 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
                             deviceProvider,
                             state.apatch,
                             state.folkpatch,
+                            apatchVersion: apatchSummary ?? '11282',
+                            folkpatchVersion: folkpatchSummary ?? '115404',
                           ),
                         ],
                       ),
@@ -127,8 +145,10 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
     BuildContext context,
     DeviceProvider provider,
     ClientInstallStatus apatchStatus,
-    ClientInstallStatus folkpatchStatus,
-  ) {
+    ClientInstallStatus folkpatchStatus, {
+    required String apatchVersion,
+    required String folkpatchVersion,
+  }) {
     final l10n = S.of(context);
 
     return Column(
@@ -137,6 +157,8 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
           context: context,
           name: 'APatch',
           description: l10n.apatchDesc,
+          packageName: AppConfig.apatchPackageName,
+          bundledVersion: apatchVersion,
           icon: Icons.security,
           installed: apatchStatus.installed,
           installing: apatchStatus.installing,
@@ -150,6 +172,8 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
           context: context,
           name: 'FolkPatch',
           description: l10n.folkpatchDesc,
+          packageName: AppConfig.folkpatchPackageName,
+          bundledVersion: folkpatchVersion,
           icon: Icons.extension,
           installed: folkpatchStatus.installed,
           installing: folkpatchStatus.installing,
@@ -166,6 +190,8 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
     required BuildContext context,
     required String name,
     required String description,
+    required String packageName,
+    required String bundledVersion,
     required IconData icon,
     required bool installed,
     required bool installing,
@@ -204,7 +230,10 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
                       name,
@@ -214,7 +243,24 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
                         color: colorScheme.onSurface,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        l10n.clientVersionBadge(bundledVersion),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                     if (installed)
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -236,11 +282,11 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
-                  description,
+                  '$description · ${l10n.clientPackageLabel(packageName)}',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 11.5,
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
@@ -297,8 +343,9 @@ class _ClientCheckCardState extends State<ClientCheckCard> {
                 ? l10n.installSuccess(clientName)
                 : l10n.installFailed(clientName),
           ),
-          backgroundColor:
-              success ? context.semantic.success : Theme.of(context).colorScheme.error,
+          backgroundColor: success
+              ? context.semantic.success
+              : Theme.of(context).colorScheme.error,
         ),
       );
     }

@@ -1,8 +1,9 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/providers/safe_change_notifier.dart';
 
-class LocaleProvider extends ChangeNotifier {
+class LocaleProvider extends ChangeNotifier with SafeChangeNotifierMixin {
   static const String _localeKey = 'locale';
   
   Locale _locale = const Locale('zh');

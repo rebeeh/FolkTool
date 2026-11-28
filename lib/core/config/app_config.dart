@@ -6,13 +6,19 @@ import 'package:path/path.dart' as p;
 abstract final class AppConfig {
   static const String appVersion =
       String.fromEnvironment('APP_VERSION', defaultValue: '1.7.0');
+  static const String appBuildNumber =
+      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '5');
+  static const String appDisplayVersion = '$appVersion+$appBuildNumber';
   static const String appName = 'FolkTool';
-  static const String appFullName = 'FolkTool - KernelPatch 自动刷入工具';
+  static const String appFullName = 'FolkTool - KernelPatch Auto Flash Tool';
   static const String githubRepoOwner = 'LyraVoid';
   static const String githubRepoName = 'FolkTool';
 
   static const String apatchPackageName = 'me.bmax.apatch';
   static const String folkpatchPackageName = 'me.yuki.folk';
+
+  static const String toolchainManifestAsset =
+      'assets/manifests/toolchain_manifest.json';
 
   static const String outputDirName = 'FolkTool/patched';
   static const String logsDirName = 'FolkTool/logs';
@@ -27,12 +33,14 @@ abstract final class AppConfig {
   static const String recentFilesKey = 'recent_files';
 
   static const String minVersionWithUnpack = '0.13.0';
+  static const String selectedVersionKeyPrefix = 'selected_kp_version_';
+  static const String customVersionPathKeyPrefix = 'custom_kp_version_path_';
   static const String selectedVersionKey = 'selected_kp_version';
   static const String customVersionPathKey = 'custom_kp_version_path';
   static const String patchTargetKey = 'patch_target';
 
-  /// Display version for single-kpimg source slots and unpack eligibility checks.
-  static const String defaultKpVersion = '0.13.3';
+  /// Default fallback KernelPatch version when reading an untagged local slot.
+  static const String defaultKpVersion = '0.13.9';
 
   static String get _exeDir => File(Platform.resolvedExecutable).parent.path;
 
@@ -168,6 +176,8 @@ abstract final class AppConfig {
   static String get kptoolsPath => sharedKptoolsPath;
   static String get adbPath => p.join(_assetsRoot, 'bin', 'adb.exe');
   static String get fastbootPath => p.join(_assetsRoot, 'bin', 'fastboot.exe');
+  static String get platformToolsPropertiesPath =>
+      p.join(_assetsRoot, 'bin', 'platform-tools.source.properties');
   static String get fallbackKpimgPath => p.join(_assetsRoot, 'assets', 'kpimg');
   static String get apatchApkPath => p.join(_assetsRoot, 'apk', 'APatch.apk');
   static String get folkpatchApkPath =>
@@ -180,6 +190,20 @@ abstract final class AppConfig {
   static String get apatchVersionsPath =>
       p.join(kpVersionsBasePath, 'apatch');
 
+  static String kptoolsPathForSource(String sourceDirectoryName) {
+    final targetSpecific =
+        p.join(kpVersionsBasePath, sourceDirectoryName, 'windows', 'kptools.exe');
+    if (File(targetSpecific).existsSync()) {
+      return targetSpecific;
+    }
+    return sharedKptoolsPath;
+  }
+
   static String kpimgFilePathForSource(String sourceDirectoryName) =>
       p.join(kpVersionsBasePath, sourceDirectoryName, 'kpimg');
+
+  static String kpimgFilePathForRelPath(String relPath) {
+    final normalized = relPath.replaceAll('/', Platform.pathSeparator);
+    return p.join(kpVersionsBasePath, normalized);
+  }
 }

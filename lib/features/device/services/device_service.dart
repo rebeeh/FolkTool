@@ -2,11 +2,44 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_error.dart';
+import '../../../core/l10n/l10n_helper.dart';
 import '../../../core/process/process_runner.dart';
-import '../../../generated/l10n.dart';
 import '../models/device_info.dart';
 
 typedef LogCallback = void Function(String line);
+
+class ToolchainDiagnostics {
+  final String adbPath;
+  final bool adbExists;
+  final String? adbVersion;
+  final String fastbootPath;
+  final bool fastbootExists;
+  final String? fastbootVersion;
+  final String? platformToolsRevision;
+  final bool kptoolsFolkpatchExists;
+  final bool kptoolsApatchExists;
+  final bool kptoolsSharedExists;
+
+  const ToolchainDiagnostics({
+    required this.adbPath,
+    required this.adbExists,
+    this.adbVersion,
+    required this.fastbootPath,
+    required this.fastbootExists,
+    this.fastbootVersion,
+    this.platformToolsRevision,
+    required this.kptoolsFolkpatchExists,
+    required this.kptoolsApatchExists,
+    required this.kptoolsSharedExists,
+  });
+
+  bool get toolsReady =>
+      adbExists &&
+      adbVersion != null &&
+      fastbootExists &&
+      fastbootVersion != null &&
+      (kptoolsFolkpatchExists || kptoolsApatchExists || kptoolsSharedExists);
+}
 
 class DeviceService {
   final ProcessRunner _processRunner;
@@ -29,10 +62,23 @@ class DeviceService {
     return int.tryParse(match.group(1) ?? '');
   }
 
+  /// Extracts a concise Platform-Tools / ADB / Fastboot version string from CLI output.
+  static String? parseToolVersionLine(String output) {
+    for (final raw in output.split(RegExp(r'\r?\n'))) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) continue;
+      final versionMatch =
+          RegExp(r'(?:version\s+|Version\s+)([0-9]+\.[0-9]+\.[0-9]+[^\s]*)')
+              .firstMatch(trimmed);
+      if (versionMatch != null) return versionMatch.group(1);
+    }
+    return null;
+  }
+
   Future<List<DeviceInfo>> getAdbDevices({LogCallback? onLog}) async {
     try {
       if (!_skipBinaryExistsCheck && !await File(AppConfig.adbPath).exists()) {
-        onLog?.call(S.current.errAdbNotExist(AppConfig.adbPath));
+        onLog?.call(appL10n.errAdbNotExist(AppConfig.adbPath));
         return [];
       }
       final result = await _runAdb(['devices'], onLog: onLog);
@@ -57,7 +103,7 @@ class DeviceService {
 
       return devices;
     } catch (e) {
-      onLog?.call(S.current.errGetAdbFailed(e));
+      onLog?.call(appL10n.errGetAdbFailed(e));
       return [];
     }
   }
@@ -66,7 +112,7 @@ class DeviceService {
     try {
       if (!_skipBinaryExistsCheck &&
           !await File(AppConfig.fastbootPath).exists()) {
-        onLog?.call(S.current.errFastbootNotExist(AppConfig.fastbootPath));
+        onLog?.call(appL10n.errFastbootNotExist(AppConfig.fastbootPath));
         return [];
       }
       final result = await _runFastboot(['devices'], onLog: onLog);
@@ -77,7 +123,7 @@ class DeviceService {
       for (var line in lines) {
         line = line.trim();
         if (line.isEmpty) continue;
-        if (line.contains('fastboot')) {
+        if (line.toLowerCase().contains('fastboot')) {
           final device = DeviceInfo.fromFastbootLine(line);
           if (device.serial.isNotEmpty) {
             devices.add(device);
@@ -87,7 +133,7 @@ class DeviceService {
 
       return devices;
     } catch (e) {
-      onLog?.call(S.current.errGetFastbootFailed(e));
+      onLog?.call(appL10n.errGetFastbootFailed(e));
       return [];
     }
   }
@@ -147,6 +193,17 @@ class DeviceService {
     );
   }
 
+  /// Queries whether fastboot device is running inside userspace (`fastbootd`).
+  Future<bool> isUserspaceFastbootd({
+    String? serial,
+    LogCallback? onLog,
+  }) async {
+    final val = await getFastbootVar('is-userspace', serial: serial, onLog: onLog);
+    if (val == null) return false;
+    final lower = val.toLowerCase();
+    return lower == 'yes' || lower == 'true' || lower == '1';
+  }
+
   /// Queries whether bootloader is unlocked in Fastboot mode (`yes` -> true, `no` -> false).
   Future<bool?> queryBootloaderUnlocked({
     String? serial,
@@ -176,7 +233,7 @@ class DeviceService {
   }) async {
     try {
       final devices = await getFastbootDevices().timeout(timeout);
-      return devices.isNotEmpty;
+      return devices.any((d) => d.state == DeviceState.fastboot);
     } catch (_) {
       return false;
     }
@@ -185,7 +242,7 @@ class DeviceService {
   Future<bool> rebootToFastboot({String? serial, LogCallback? onLog}) async {
     _lastRawError = null;
     try {
-      onLog?.call(S.current.logRebootingToFastboot);
+      onLog?.call(appL10n.logRebootingToFastboot);
       final args = <String>[
         if (serial != null) ...['-s', serial],
         'reboot',
@@ -194,17 +251,35 @@ class DeviceService {
       final result = await _runAdb(args, onLog: onLog);
 
       if (result.exitCode == 0) {
-        onLog?.call(S.current.logRebootCmdSent);
+        onLog?.call(appL10n.logRebootCmdSent);
         return true;
       } else {
         final raw = '${result.stderr}\n${result.stdout}'.trim();
-        _lastRawError = raw.isNotEmpty ? raw : 'adb exited with code ${result.exitCode}';
-        onLog?.call(S.current.errRebootFailed(result.stderr));
+        _lastRawError =
+            raw.isNotEmpty ? raw : 'adb exited with code ${result.exitCode}';
+        onLog?.call(appL10n.errRebootFailed(result.stderr));
         return false;
       }
     } catch (e) {
       _lastRawError = e.toString();
-      onLog?.call(S.current.errRebootException(e));
+      onLog?.call(appL10n.errRebootException(e));
+      return false;
+    }
+  }
+
+  /// Reboots a device in `fastbootd` userspace back to bootloader `fastboot`.
+  Future<bool> rebootFastbootdToBootloader({
+    String? serial,
+    LogCallback? onLog,
+  }) async {
+    try {
+      final args = <String>[
+        if (serial != null) ...['-s', serial],
+        'reboot-bootloader',
+      ];
+      final result = await _runFastboot(args, onLog: onLog);
+      return result.exitCode == 0;
+    } catch (_) {
       return false;
     }
   }
@@ -216,22 +291,23 @@ class DeviceService {
   }) async {
     final endTime = DateTime.now().add(timeout);
 
-    onLog?.call(S.current.logWaitFastboot(timeout.inSeconds));
+    onLog?.call(appL10n.logWaitFastboot(timeout.inSeconds));
 
     while (DateTime.now().isBefore(endTime)) {
       final devices = await getFastbootDevices();
       if (devices.isNotEmpty) {
         final match = expectedSerial != null
-            ? devices.where((d) => d.serial == expectedSerial).firstOrNull ??
-                devices.first
-            : devices.first;
-        onLog?.call(S.current.logFastbootDetected(match.serial));
-        return match;
+            ? devices.where((d) => d.serial == expectedSerial).firstOrNull
+            : (devices.length == 1 ? devices.first : null);
+        if (match != null) {
+          onLog?.call(appL10n.logFastbootDetected(match.serial));
+          return match;
+        }
       }
       await Future.delayed(const Duration(seconds: 2));
     }
 
-    onLog?.call(S.current.logWaitFastbootTimeout);
+    onLog?.call(appL10n.logWaitFastbootTimeout);
     return null;
   }
 
@@ -260,7 +336,7 @@ class DeviceService {
       }
 
       final absolutePath = imageFile.absolute.path;
-      onLog?.call(S.current.logFlashingBootPath(absolutePath));
+      onLog?.call(appL10n.logFlashingBootPath(absolutePath));
 
       final args = <String>[
         if (serial != null) ...['-s', serial],
@@ -275,18 +351,19 @@ class DeviceService {
       );
 
       if (result.exitCode == 0) {
-        onLog?.call(S.current.logFlashBootSuccess);
+        onLog?.call(appL10n.logFlashBootSuccess);
         return true;
       } else {
         final errText = '${result.stderr}\n${result.stdout}'.trim();
-        _lastRawError =
-            errText.isNotEmpty ? errText : 'fastboot exited with code ${result.exitCode}';
-        onLog?.call(S.current.errFlashFailed(errText));
+        _lastRawError = errText.isNotEmpty
+            ? errText
+            : 'fastboot exited with code ${result.exitCode}';
+        onLog?.call(appL10n.errFlashFailed(errText));
         return false;
       }
     } catch (e) {
       _lastRawError = e.toString();
-      onLog?.call(S.current.errFlashException(e));
+      onLog?.call(appL10n.errFlashException(e));
       return false;
     }
   }
@@ -297,7 +374,7 @@ class DeviceService {
     LogCallback? onLog,
   }) async {
     try {
-      onLog?.call(S.current.logBackingUpPartition);
+      onLog?.call(appL10n.logBackingUpPartition);
 
       final args = <String>[
         if (serial != null) ...['-s', serial],
@@ -308,10 +385,10 @@ class DeviceService {
       final result = await _runFastboot(args, onLog: onLog);
 
       if (result.exitCode == 0 && await File(outputPath).exists()) {
-        onLog?.call(S.current.logBackupSuccess(outputPath));
+        onLog?.call(appL10n.logBackupSuccess(outputPath));
         return true;
       } else {
-        onLog?.call(S.current.logBackupFailedTryAlt);
+        onLog?.call(appL10n.logBackupFailedTryAlt);
         return await _backupBootAlternative(
           outputPath,
           serial: serial,
@@ -319,7 +396,7 @@ class DeviceService {
         );
       }
     } catch (e) {
-      onLog?.call(S.current.errBackupException(e));
+      onLog?.call(appL10n.errBackupException(e));
       return false;
     }
   }
@@ -354,7 +431,7 @@ class DeviceService {
 
   Future<bool> rebootDevice({String? serial, LogCallback? onLog}) async {
     try {
-      onLog?.call(S.current.logRebootingDevice);
+      onLog?.call(appL10n.logRebootingDevice);
       final args = <String>[
         if (serial != null) ...['-s', serial],
         'reboot',
@@ -362,14 +439,14 @@ class DeviceService {
       final result = await _runFastboot(args, onLog: onLog);
 
       if (result.exitCode == 0) {
-        onLog?.call(S.current.logDeviceRebooting);
+        onLog?.call(appL10n.logDeviceRebooting);
         return true;
       } else {
-        onLog?.call(S.current.errRebootFailed(result.stderr));
+        onLog?.call(appL10n.errRebootFailed(result.stderr));
         return false;
       }
     } catch (e) {
-      onLog?.call(S.current.errRebootException(e));
+      onLog?.call(appL10n.errRebootException(e));
       return false;
     }
   }
@@ -404,14 +481,15 @@ class DeviceService {
     _lastRawError = null;
     try {
       if (!_skipBinaryExistsCheck && !await File(AppConfig.adbPath).exists()) {
-        _lastRawError = S.current.errAdbNotExist(AppConfig.adbPath);
+        _lastRawError = appL10n.errAdbNotExist(AppConfig.adbPath);
         onLog?.call(_lastRawError!);
         return false;
       }
       final res = await _runAdb(['start-server'], onLog: onLog);
       if (res.exitCode != 0) {
         final raw = '${res.stderr}\n${res.stdout}'.trim();
-        _lastRawError = raw.isNotEmpty ? raw : 'adb start-server exited ${res.exitCode}';
+        _lastRawError =
+            raw.isNotEmpty ? raw : 'adb start-server exited ${res.exitCode}';
         return false;
       }
       return true;
@@ -426,40 +504,99 @@ class DeviceService {
   Future<bool> checkFastbootExists() async =>
       File(AppConfig.fastbootPath).exists();
 
+  Future<ToolchainDiagnostics> getToolchainDiagnostics() async {
+    final adbExists = await File(AppConfig.adbPath).exists();
+    final fastbootExists = await File(AppConfig.fastbootPath).exists();
+
+    String? adbVer;
+    if (adbExists) {
+      try {
+        final res = await _processRunner.run(
+          AppConfig.adbPath,
+          ['version'],
+          timeout: const Duration(seconds: 5),
+        );
+        if (res.exitCode == 0) {
+          adbVer = parseToolVersionLine('${res.stdout}\n${res.stderr}') ??
+              res.stdout.toString().split('\n').first.trim();
+        }
+      } catch (_) {}
+    }
+
+    String? fbVer;
+    if (fastbootExists) {
+      try {
+        final res = await _processRunner.run(
+          AppConfig.fastbootPath,
+          ['--version'],
+          timeout: const Duration(seconds: 5),
+        );
+        if (res.exitCode == 0) {
+          fbVer = parseToolVersionLine('${res.stdout}\n${res.stderr}') ??
+              res.stdout.toString().split('\n').first.trim();
+        }
+      } catch (_) {}
+    }
+
+    String? rev;
+    try {
+      final propsFile = File(AppConfig.platformToolsPropertiesPath);
+      if (await propsFile.exists()) {
+        final content = await propsFile.readAsString();
+        rev = RegExp(r'Pkg\.Revision=([^\r\n]+)').firstMatch(content)?.group(1);
+      }
+    } catch (_) {}
+
+    return ToolchainDiagnostics(
+      adbPath: AppConfig.adbPath,
+      adbExists: adbExists,
+      adbVersion: adbVer,
+      fastbootPath: AppConfig.fastbootPath,
+      fastbootExists: fastbootExists,
+      fastbootVersion: fbVer,
+      platformToolsRevision: rev,
+      kptoolsFolkpatchExists:
+          await File(AppConfig.kptoolsPathForSource('folkpatch')).exists(),
+      kptoolsApatchExists:
+          await File(AppConfig.kptoolsPathForSource('apatch')).exists(),
+      kptoolsSharedExists: await File(AppConfig.sharedKptoolsPath).exists(),
+    );
+  }
+
   Future<bool> checkDriverInstalled({LogCallback? onLog}) async {
     try {
-      onLog?.call(S.current.logCheckAdb);
+      onLog?.call(appL10n.logCheckAdb);
 
       if (!await File(AppConfig.adbPath).exists()) {
-        onLog?.call(S.current.errAdbNotExist(AppConfig.adbPath));
+        onLog?.call(appL10n.errAdbNotExist(AppConfig.adbPath));
         return false;
       }
 
       final adbResult = await _runAdb(['version'], onLog: onLog);
 
       if (adbResult.exitCode != 0) {
-        onLog?.call(S.current.errAdbNotAvailable);
+        onLog?.call(appL10n.errAdbNotAvailable);
         return false;
       }
 
-      onLog?.call(S.current.logCheckFastboot);
+      onLog?.call(appL10n.logCheckFastboot);
 
       if (!await File(AppConfig.fastbootPath).exists()) {
-        onLog?.call(S.current.errFastbootNotExist(AppConfig.fastbootPath));
+        onLog?.call(appL10n.errFastbootNotExist(AppConfig.fastbootPath));
         return false;
       }
 
       final fastbootResult = await _runFastboot(['--version'], onLog: onLog);
 
       if (fastbootResult.exitCode != 0) {
-        onLog?.call(S.current.errFastbootNotAvailable);
+        onLog?.call(appL10n.errFastbootNotAvailable);
         return false;
       }
 
-      onLog?.call(S.current.logDriverCheckPassed);
+      onLog?.call(appL10n.logDriverCheckPassed);
       return true;
     } catch (e) {
-      onLog?.call(S.current.errDriverCheckFailed(e));
+      onLog?.call(appL10n.errDriverCheckFailed(e));
       return false;
     }
   }
@@ -470,7 +607,7 @@ class DeviceService {
     LogCallback? onLog,
   }) async {
     final executable = AppConfig.adbPath;
-    onLog?.call(S.current.logExecuteCmd('adb ${args.join(' ')}'));
+    onLog?.call(appL10n.logExecuteCmd('adb ${args.join(' ')}'));
 
     final result = await _processRunner.run(
       executable,
@@ -494,7 +631,7 @@ class DeviceService {
     LogCallback? onLog,
   }) async {
     final executable = AppConfig.fastbootPath;
-    onLog?.call(S.current.logExecuteCmd('fastboot ${args.join(' ')}'));
+    onLog?.call(appL10n.logExecuteCmd('fastboot ${args.join(' ')}'));
 
     final result = await _processRunner.run(
       executable,
@@ -515,19 +652,16 @@ class DeviceService {
 
   /// Classifies raw ADB output/exceptions into an actionable [AppError].
   static AppError classifyAdbError(String rawError, {String? stage}) {
+    final l10n = appL10n;
     final lower = rawError.toLowerCase();
     if (lower.contains('unauthorized')) {
       return AppError(
         category: AppErrorCategory.adb,
-        title: 'USB Debugging Not Authorized',
-        message:
-            'The device is connected, but USB debugging RSA authorization has not been granted.',
-        reason:
-            'The RSA authorization prompt on the phone was dismissed or not yet accepted.',
+        title: l10n.errTitleUnauthorized,
+        message: l10n.errMsgUnauthorized('-'),
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps:
-            'Unlock your phone screen, accept the "Allow USB debugging" prompt (check "Always allow"), and click Refresh.',
+        nextSteps: l10n.errNextUnauthorized,
         canSafelyRetry: true,
         technicalDetails: rawError,
       );
@@ -535,15 +669,11 @@ class DeviceService {
     if (lower.contains('offline')) {
       return AppError(
         category: AppErrorCategory.deviceConnection,
-        title: 'ADB Device Offline',
-        message:
-            'The device appears in ADB as offline and cannot receive commands.',
-        reason:
-            'Unstable USB connection, outdated ADB driver, or USB debugging handshake stalled.',
+        title: l10n.errTitleOffline,
+        message: l10n.errMsgOffline('-'),
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps:
-            'Reconnect the USB cable (prefer a direct motherboard USB port) or toggle USB debugging off and back on.',
+        nextSteps: l10n.errNextOffline,
         canSafelyRetry: true,
         technicalDetails: rawError,
       );
@@ -551,14 +681,11 @@ class DeviceService {
     if (lower.contains('more than one device')) {
       return AppError(
         category: AppErrorCategory.deviceConnection,
-        title: 'Multiple Devices Connected',
-        message: 'More than one Android device or emulator is connected.',
-        reason:
-            'ADB cannot target a single device when multiple devices are attached.',
+        title: l10n.errTitleMultipleDevices,
+        message: l10n.errMsgMultipleDevices,
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps:
-            'Disconnect extra devices/emulators or select the exact target device in Device Status.',
+        nextSteps: l10n.errNextMultipleDevices,
         canSafelyRetry: true,
         technicalDetails: rawError,
       );
@@ -568,13 +695,11 @@ class DeviceService {
         lower.contains('daemon')) {
       return AppError(
         category: AppErrorCategory.adb,
-        title: 'ADB Server Port Conflict',
-        message: 'The ADB daemon could not start or bind to port 5037.',
-        reason: 'Another phone suite or Android tool is occupying the ADB port.',
+        title: l10n.errTitleAdbPortConflict,
+        message: l10n.errMsgAdbPortConflict,
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps:
-            'Close conflicting Android tools (e.g., phone managers, emulators) and retry.',
+        nextSteps: l10n.errNextAdbPortConflict,
         canSafelyRetry: true,
         technicalDetails: rawError,
       );
@@ -582,24 +707,22 @@ class DeviceService {
     if (lower.contains('timeout')) {
       return AppError(
         category: AppErrorCategory.process,
-        title: 'ADB Command Timed Out',
-        message:
-            'The device did not respond to the ADB command within the expected time.',
+        title: l10n.errTitleAdbTimeout,
+        message: l10n.errMsgAdbTimeout,
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps: 'Check the USB cable and phone screen, then retry.',
+        nextSteps: l10n.errNextNoDevice,
         canSafelyRetry: true,
         technicalDetails: rawError,
       );
     }
     return AppError(
       category: AppErrorCategory.adb,
-      title: 'ADB Command Failed',
-      message: 'An ADB command failed to complete.',
+      title: l10n.errTitleAdbFailed,
+      message: l10n.errMsgAdbFailed,
       affectedStage: stage,
       deviceSafe: true,
-      nextSteps:
-          'Verify USB connection, USB debugging, and drivers, then check Logs for details.',
+      nextSteps: l10n.errNextPreflightFailed,
       canSafelyRetry: true,
       technicalDetails: rawError,
     );
@@ -611,21 +734,18 @@ class DeviceService {
     String? stage,
     bool duringFlash = false,
   }) {
+    final l10n = appL10n;
     final lower = rawError.toLowerCase();
     if (lower.contains('locked') ||
         lower.contains('unlock') ||
         lower.contains('lock state')) {
       return AppError(
         category: AppErrorCategory.fastboot,
-        title: 'Bootloader Is Locked',
-        message:
-            'The device rejected flashing because the bootloader is locked.',
-        reason:
-            'OEM/Bootloader unlock is required before flashing custom boot images.',
+        title: l10n.errTitleBootloaderLocked,
+        message: l10n.errMsgBootloaderLocked,
         affectedStage: stage,
         deviceSafe: true,
-        nextSteps:
-            'Unlock the bootloader according to your device manufacturer instructions (note: unlocking usually wipes user data).',
+        nextSteps: l10n.errNextBootloaderLocked,
         canSafelyRetry: false,
         technicalDetails: rawError,
       );
@@ -634,13 +754,11 @@ class DeviceService {
         (lower.contains('not found') || lower.contains('doesn\'t exist'))) {
       return AppError(
         category: AppErrorCategory.fastboot,
-        title: 'Target Partition Not Found',
-        message:
-            'The device reported that the target boot partition does not exist.',
+        title: l10n.errTitlePartitionNotFound,
+        message: l10n.errMsgPartitionNotFound,
         affectedStage: stage,
         deviceSafe: !duringFlash,
-        nextSteps:
-            'Check whether your device uses A/B slots (`boot_a`/`boot_b`) or `init_boot`, and verify compatibility before retrying.',
+        nextSteps: l10n.errNextFastbootTimeout,
         canSafelyRetry: false,
         technicalDetails: rawError,
       );
@@ -648,12 +766,11 @@ class DeviceService {
     if (lower.contains('permission') || lower.contains('access is denied')) {
       return AppError(
         category: AppErrorCategory.permission,
-        title: 'Insufficient Permissions / Driver Access',
-        message: 'Windows denied access to the Fastboot USB interface.',
+        title: l10n.errTitleFastbootPermission,
+        message: l10n.errMsgFastbootPermission,
         affectedStage: stage,
         deviceSafe: !duringFlash,
-        nextSteps:
-            'Reinstall the Fastboot/USB driver from Driver Install and ensure no other flashing tool is holding the device.',
+        nextSteps: l10n.driverHelpGuide,
         canSafelyRetry: !duringFlash,
         technicalDetails: rawError,
       );
@@ -661,30 +778,25 @@ class DeviceService {
     if (lower.contains('timeout')) {
       return AppError(
         category: AppErrorCategory.fastboot,
-        title: 'Fastboot Command Timed Out',
-        message: 'Fastboot did not respond in time.',
+        title: l10n.errTitleFastbootTimeoutCmd,
+        message: l10n.errMsgFastbootTimeoutCmd,
         affectedStage: stage,
         deviceSafe: !duringFlash,
-        nextSteps: duringFlash
-            ? 'Do NOT disconnect abruptly if the device is still writing. Check the phone screen before attempting recovery.'
-            : 'Check the USB cable/Fastboot driver and verify the device appears in Device Status.',
+        nextSteps: l10n.errNextFastbootTimeout,
         canSafelyRetry: !duringFlash,
         technicalDetails: rawError,
       );
     }
     return AppError(
-      category: duringFlash
-          ? AppErrorCategory.flashing
-          : AppErrorCategory.fastboot,
-      title: duringFlash ? 'Boot Flashing Failed' : 'Fastboot Command Failed',
+      category:
+          duringFlash ? AppErrorCategory.flashing : AppErrorCategory.fastboot,
+      title: duringFlash ? l10n.errFlashBootFailed : l10n.errTitleFastbootFailed,
       message: duringFlash
-          ? 'Flashing the patched boot image did not complete cleanly.'
-          : 'A Fastboot operation failed.',
+          ? l10n.errFlashBootFailed
+          : l10n.errTitleFastbootFailed,
       affectedStage: stage,
       deviceSafe: !duringFlash,
-      nextSteps: duringFlash
-          ? 'Inspect Logs and check your device state. If the device fails to boot, use Restore Stock Boot in Fastboot mode.'
-          : 'Check Fastboot connection and USB drivers, then try again.',
+      nextSteps: l10n.errNextFastbootTimeout,
       canSafelyRetry: !duringFlash,
       technicalDetails: rawError,
     );
@@ -718,7 +830,7 @@ class DeviceService {
       }
       return installed;
     } catch (e) {
-      onLog?.call('检查应用安装状态失败: $e');
+      onLog?.call(appL10n.errCheckClientFailed(e));
       return const {};
     }
   }
@@ -758,11 +870,11 @@ class DeviceService {
   }) async {
     try {
       if (!await File(apkPath).exists()) {
-        onLog?.call('APK 文件不存在: $apkPath');
+        onLog?.call(appL10n.errApkNotFound(apkPath));
         return false;
       }
 
-      onLog?.call('正在安装: $apkPath');
+      onLog?.call(appL10n.logInstallingApk(apkPath));
       final args = <String>[
         if (serial != null) ...['-s', serial],
         'install',
@@ -774,15 +886,15 @@ class DeviceService {
       if (result.exitCode == 0) {
         final output = result.stdout.toString().toLowerCase();
         if (output.contains('success')) {
-          onLog?.call('安装成功');
+          onLog?.call(appL10n.logInstallApkSuccess);
           return true;
         }
       }
 
-      onLog?.call('安装失败: ${result.stderr}');
+      onLog?.call(appL10n.errInstallApkFailed(result.stderr));
       return false;
     } catch (e) {
-      onLog?.call('安装异常: $e');
+      onLog?.call(appL10n.errInstallApkException(e));
       return false;
     }
   }

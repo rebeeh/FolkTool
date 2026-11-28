@@ -5,12 +5,14 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/config/app_config.dart';
 import '../core/config/app_semantic_colors.dart';
 import '../core/updates/update_service.dart';
+import '../core/widgets/responsive_layout.dart';
 import '../features/device/providers/device_provider.dart';
 import '../features/device/widgets/client_check_card.dart';
 import '../features/device/widgets/device_status_card.dart';
 import '../features/drivers/screens/driver_install_screen.dart';
 import '../features/files/services/file_service.dart';
 import '../features/patching/providers/patch_provider.dart';
+import '../features/patching/providers/version_provider.dart';
 import '../features/patching/screens/quick_patch_screen.dart';
 import '../features/patching/screens/simple_patch_screen.dart';
 import '../features/patching/screens/step_patch_screen.dart';
@@ -23,6 +25,20 @@ import '../generated/l10n.dart';
 class _SelectNavIntent extends Intent {
   final int index;
   const _SelectNavIntent(this.index);
+}
+
+class _NavDestinationSpec {
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  final String shortLabel;
+
+  const _NavDestinationSpec({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    required this.shortLabel,
+  });
 }
 
 class AppShellScreen extends StatefulWidget {
@@ -43,14 +59,23 @@ class _AppShellScreenState extends State<AppShellScreen> {
   @override
   void initState() {
     super.initState();
-    _initData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _initData();
+    });
   }
 
   Future<void> _initData() async {
     final deviceProvider = context.read<DeviceProvider>();
     final settingsProvider = context.read<SettingsProvider>();
+    final versionProvider = context.read<VersionProvider>();
 
-    await deviceProvider.checkDriver();
+    await Future.wait([
+      settingsProvider.ensureLoaded(),
+      deviceProvider.checkDriver(),
+      versionProvider.ensureLoaded(),
+    ]);
+    if (!mounted) return;
+
     if (settingsProvider.autoMonitorDevices) {
       deviceProvider.startMonitoring();
     } else {
@@ -81,21 +106,20 @@ class _AppShellScreenState extends State<AppShellScreen> {
   }
 
   Future<void> _confirmClearRecentFiles() async {
+    final l10n = S.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Clear Recent Files?'),
-        content: const Text(
-          'This removes entries from the Recent Files list. Your actual files on disk will not be deleted.',
-        ),
+        title: Text(l10n.clearRecentFilesTitle),
+        content: Text(l10n.clearRecentFilesDesc),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Clear All'),
+            child: Text(l10n.clearAll),
           ),
         ],
       ),
@@ -119,14 +143,11 @@ class _AppShellScreenState extends State<AppShellScreen> {
 
   void _selectNav(int index) {
     if (index == _selectedNavIndex) return;
+    final l10n = S.of(context);
     final patchProvider = context.read<PatchProvider>();
     if (patchProvider.isRunning) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'An operation is currently running. Wait for completion or cancel before leaving this view.',
-          ),
-        ),
+        SnackBar(content: Text(l10n.operationInProgressNavBlocked)),
       );
       return;
     }
@@ -134,6 +155,157 @@ class _AppShellScreenState extends State<AppShellScreen> {
     if (index == 0) {
       _loadRecentFiles();
     }
+  }
+
+  List<_NavDestinationSpec> _navSpecs(S l10n) => [
+        _NavDestinationSpec(
+          icon: Icons.dashboard_outlined,
+          selectedIcon: Icons.dashboard_rounded,
+          label: l10n.navDashboard,
+          shortLabel: l10n.home,
+        ),
+        _NavDestinationSpec(
+          icon: Icons.flash_on_outlined,
+          selectedIcon: Icons.flash_on_rounded,
+          label: l10n.quickPatch,
+          shortLabel: l10n.navQuickShort,
+        ),
+        _NavDestinationSpec(
+          icon: Icons.list_alt_outlined,
+          selectedIcon: Icons.list_alt_rounded,
+          label: l10n.stepPatch,
+          shortLabel: l10n.navStepShort,
+        ),
+        _NavDestinationSpec(
+          icon: Icons.build_circle_outlined,
+          selectedIcon: Icons.build_circle_rounded,
+          label: l10n.simplePatch,
+          shortLabel: l10n.navLocalShort,
+        ),
+        _NavDestinationSpec(
+          icon: Icons.usb_outlined,
+          selectedIcon: Icons.usb_rounded,
+          label: l10n.driverInstall,
+          shortLabel: l10n.navDriversShort,
+        ),
+        _NavDestinationSpec(
+          icon: Icons.settings_outlined,
+          selectedIcon: Icons.settings_rounded,
+          label: l10n.navSettings,
+          shortLabel: l10n.navSettings,
+        ),
+      ];
+
+  Future<void> _showCompactMoreSheet(
+    BuildContext context,
+    List<_NavDestinationSpec> specs,
+  ) async {
+    final l10n = S.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final idx in const [3, 4, 5])
+                  ListTile(
+                    leading: Icon(
+                      _selectedNavIndex == idx
+                          ? specs[idx].selectedIcon
+                          : specs[idx].icon,
+                      color: _selectedNavIndex == idx
+                          ? Theme.of(context).colorScheme.primary
+                          : null,
+                    ),
+                    title: Text(specs[idx].label),
+                    selected: _selectedNavIndex == idx,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _selectNav(idx);
+                    },
+                  ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: Text(l10n.about),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showAboutDialog();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCompactDrawer(
+    BuildContext context,
+    List<_NavDestinationSpec> specs,
+    S l10n,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return NavigationDrawer(
+      selectedIndex: _selectedNavIndex,
+      onDestinationSelected: (idx) {
+        Navigator.of(context).pop();
+        _selectNav(idx);
+      },
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 16, 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.phonelink_setup_rounded,
+                  color: colorScheme.onPrimaryContainer,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l10n.appName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'v${AppConfig.appVersion}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 16, indent: 16, endIndent: 16),
+        for (final spec in specs)
+          NavigationDrawerDestination(
+            icon: Icon(spec.icon),
+            selectedIcon: Icon(spec.selectedIcon),
+            label: Text(spec.label),
+          ),
+      ],
+    );
   }
 
   Widget _buildActivePage(BuildContext context) {
@@ -159,39 +331,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
     final isZh = context.select<LocaleProvider, bool>((p) => p.isZh);
     final themeMode = context.select<ThemeProvider, ThemeMode>((p) => p.themeMode);
     final colorScheme = Theme.of(context).colorScheme;
-
-    final destinations = <NavigationRailDestination>[
-      const NavigationRailDestination(
-        icon: Icon(Icons.dashboard_outlined),
-        selectedIcon: Icon(Icons.dashboard_rounded),
-        label: Text('Dashboard'),
-      ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.flash_on_outlined),
-        selectedIcon: const Icon(Icons.flash_on_rounded),
-        label: Text(l10n.quickPatch),
-      ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.list_alt_outlined),
-        selectedIcon: const Icon(Icons.list_alt_rounded),
-        label: Text(l10n.stepPatch),
-      ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.build_circle_outlined),
-        selectedIcon: const Icon(Icons.build_circle_rounded),
-        label: Text(l10n.simplePatch),
-      ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.usb_outlined),
-        selectedIcon: const Icon(Icons.usb_rounded),
-        label: Text(l10n.driverInstall),
-      ),
-      const NavigationRailDestination(
-        icon: Icon(Icons.settings_outlined),
-        selectedIcon: Icon(Icons.settings_rounded),
-        label: Text('Settings'),
-      ),
-    ];
+    final specs = _navSpecs(l10n);
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
@@ -221,24 +361,28 @@ class _AppShellScreenState extends State<AppShellScreen> {
           autofocus: true,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 1024;
-              final isMedium = constraints.maxWidth >= 720;
+              final sizeClass = WindowSizeClass.fromWidth(constraints.maxWidth);
+              final isCompact = sizeClass == WindowSizeClass.compact;
+              final isExpanded = sizeClass == WindowSizeClass.expanded;
 
               return Scaffold(
+                drawer: isCompact
+                    ? _buildCompactDrawer(context, specs, l10n)
+                    : null,
                 appBar: AppBar(
                   title: Text(l10n.appName),
-                  leading: isMedium
-                      ? IconButton(
+                  leading: isCompact
+                      ? null
+                      : IconButton(
                           icon: Icon(
-                            _sidebarCollapsed || !isWide
+                            _sidebarCollapsed || !isExpanded
                                 ? Icons.menu_open_rounded
                                 : Icons.menu_rounded,
                           ),
-                          tooltip: 'Toggle Navigation',
+                          tooltip: l10n.toggleNavigation,
                           onPressed: () => setState(
                               () => _sidebarCollapsed = !_sidebarCollapsed),
-                        )
-                      : null,
+                        ),
                   actions: [
                     PopupMenuButton<ThemeMode>(
                       icon: Icon(_themeIcon(themeMode)),
@@ -290,7 +434,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
                     IconButton(
                       icon: const Icon(Icons.settings_outlined),
                       onPressed: () => _selectNav(5),
-                      tooltip: 'Settings (Ctrl+,)',
+                      tooltip: l10n.settingsShortcutTooltip,
                     ),
                     IconButton(
                       icon: const Icon(Icons.info_outline),
@@ -301,12 +445,61 @@ class _AppShellScreenState extends State<AppShellScreen> {
                 ),
                 body: Row(
                   children: [
-                    if (isMedium) ...[
+                    if (!isCompact) ...[
                       NavigationRail(
-                        extended: isWide && !_sidebarCollapsed,
+                        extended: isExpanded && !_sidebarCollapsed,
                         selectedIndex: _selectedNavIndex,
                         onDestinationSelected: _selectNav,
-                        destinations: destinations,
+                        labelType: isExpanded && !_sidebarCollapsed
+                            ? NavigationRailLabelType.none
+                            : NavigationRailLabelType.all,
+                        leading: isExpanded && !_sidebarCollapsed
+                            ? Padding(
+                                padding: const EdgeInsets.only(
+                                    top: 4, bottom: 12, left: 12, right: 12),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primaryContainer
+                                        .withValues(alpha: 0.55),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.verified_user_outlined,
+                                        size: 16,
+                                        color: colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'v${AppConfig.appVersion}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: colorScheme.onSurface,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : null,
+                        destinations: specs
+                            .map(
+                              (spec) => NavigationRailDestination(
+                                icon: Icon(spec.icon),
+                                selectedIcon: Icon(spec.selectedIcon),
+                                label: Text(
+                                  isExpanded && !_sidebarCollapsed
+                                      ? spec.label
+                                      : spec.shortLabel,
+                                ),
+                              ),
+                            )
+                            .toList(),
                       ),
                       VerticalDivider(
                         width: 1,
@@ -322,38 +515,41 @@ class _AppShellScreenState extends State<AppShellScreen> {
                     ),
                   ],
                 ),
-                bottomNavigationBar: isMedium
-                    ? null
-                    : NavigationBar(
-                        selectedIndex: _selectedNavIndex,
-                        onDestinationSelected: _selectNav,
+                bottomNavigationBar: isCompact
+                    ? NavigationBar(
+                        selectedIndex:
+                            _selectedNavIndex >= 3 ? 3 : _selectedNavIndex,
+                        onDestinationSelected: (idx) {
+                          if (idx < 3) {
+                            _selectNav(idx);
+                          } else {
+                            _showCompactMoreSheet(context, specs);
+                          }
+                        },
                         destinations: [
-                          const NavigationDestination(
-                            icon: Icon(Icons.dashboard_outlined),
-                            label: 'Home',
+                          NavigationDestination(
+                            icon: Icon(specs[0].icon),
+                            selectedIcon: Icon(specs[0].selectedIcon),
+                            label: specs[0].shortLabel,
                           ),
                           NavigationDestination(
-                            icon: const Icon(Icons.flash_on_outlined),
-                            label: l10n.quickPatch,
+                            icon: Icon(specs[1].icon),
+                            selectedIcon: Icon(specs[1].selectedIcon),
+                            label: specs[1].shortLabel,
                           ),
                           NavigationDestination(
-                            icon: const Icon(Icons.list_alt_outlined),
-                            label: l10n.stepPatch,
-                          ),
-                          const NavigationDestination(
-                            icon: Icon(Icons.build_circle_outlined),
-                            label: 'Local',
+                            icon: Icon(specs[2].icon),
+                            selectedIcon: Icon(specs[2].selectedIcon),
+                            label: specs[2].shortLabel,
                           ),
                           NavigationDestination(
-                            icon: const Icon(Icons.usb_outlined),
-                            label: l10n.driverInstall,
-                          ),
-                          const NavigationDestination(
-                            icon: Icon(Icons.settings_outlined),
-                            label: 'Settings',
+                            icon: const Icon(Icons.apps_rounded),
+                            selectedIcon: const Icon(Icons.apps_rounded),
+                            label: l10n.navMore,
                           ),
                         ],
-                      ),
+                      )
+                    : null,
               );
             },
           ),
@@ -366,93 +562,104 @@ class _AppShellScreenState extends State<AppShellScreen> {
     final l10n = S.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Scrollbar(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 880),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_availableUpdate != null) ...[
-                  Card(
-                    color: colorScheme.primaryContainer.withValues(alpha: 0.45),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.system_update_alt,
-                            color: colorScheme.primary,
-                            size: 20,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 560;
+        final pad = isCompact ? 14.0 : 20.0;
+
+        return Scrollbar(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(pad),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 980),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_availableUpdate != null) ...[
+                      Card(
+                        color:
+                            colorScheme.primaryContainer.withValues(alpha: 0.45),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
                           ),
-                          const SizedBox(width: 12),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.system_update_alt,
+                                color: colorScheme.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  l10n.newVersionAvailable(
+                                    _availableUpdate!.tagName,
+                                  ),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: colorScheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () => launchUrl(
+                                  Uri.parse(_availableUpdate!.htmlUrl),
+                                  mode: LaunchMode.externalApplication,
+                                ),
+                                child: Text(l10n.download),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                tooltip: l10n.dismiss,
+                                onPressed: () => setState(() {
+                                  _availableUpdate = null;
+                                }),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    const DeviceStatusCard(),
+                    const ClientCheckCard(),
+                    const SizedBox(height: 20),
+                    _buildModeSelection(context),
+                    if (_recentFiles.isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
                           Expanded(
                             child: Text(
-                              'New version available: ${_availableUpdate!.tagName}',
+                              l10n.recentFiles,
                               style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
                                 color: colorScheme.onSurface,
                               ),
                             ),
                           ),
-                          TextButton(
-                            onPressed: () => launchUrl(
-                              Uri.parse(_availableUpdate!.htmlUrl),
-                              mode: LaunchMode.externalApplication,
-                            ),
-                            child: const Text('Download'),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, size: 18),
-                            tooltip: 'Dismiss',
-                            onPressed: () => setState(() {
-                              _availableUpdate = null;
-                            }),
+                          TextButton.icon(
+                            onPressed: _confirmClearRecentFiles,
+                            icon: const Icon(Icons.clear_all, size: 16),
+                            label: Text(l10n.clearAll),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                const DeviceStatusCard(),
-                const ClientCheckCard(),
-                const SizedBox(height: 20),
-                _buildModeSelection(context),
-                if (_recentFiles.isNotEmpty) ...[
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Text(
-                        l10n.recentFiles,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurface,
-                        ),
-                      ),
-                      const Spacer(),
-                      TextButton.icon(
-                        onPressed: _confirmClearRecentFiles,
-                        icon: const Icon(Icons.clear_all, size: 16),
-                        label: const Text('Clear All'),
-                      ),
+                      const SizedBox(height: 10),
+                      _buildRecentFiles(context),
                     ],
-                  ),
-                  const SizedBox(height: 10),
-                  _buildRecentFiles(context),
-                ],
-              ],
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -472,61 +679,43 @@ class _AppShellScreenState extends State<AppShellScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: _buildModeCard(
-                  context: context,
-                  title: l10n.quickPatch,
-                  subtitle: l10n.quickPatchSubtitle,
-                  icon: Icons.flash_on,
-                  color: Colors.blue,
-                  onTap: () => _selectNav(1),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: _buildModeCard(
-                  context: context,
-                  title: l10n.stepPatch,
-                  subtitle: l10n.stepPatchSubtitle,
-                  icon: Icons.list_alt,
-                  color: context.semantic.success,
-                  onTap: () => _selectNav(2),
-                ),
-              ),
-            ],
+        ResponsivePairGrid(
+          breakpoint: 580,
+          first: _buildModeCard(
+            context: context,
+            title: l10n.quickPatch,
+            subtitle: l10n.quickPatchSubtitle,
+            icon: Icons.flash_on,
+            color: Colors.blue,
+            onTap: () => _selectNav(1),
+          ),
+          second: _buildModeCard(
+            context: context,
+            title: l10n.stepPatch,
+            subtitle: l10n.stepPatchSubtitle,
+            icon: Icons.list_alt,
+            color: context.semantic.success,
+            onTap: () => _selectNav(2),
           ),
         ),
         const SizedBox(height: 14),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: _buildModeCard(
-                  context: context,
-                  title: l10n.simplePatch,
-                  subtitle: l10n.simplePatchSubtitle,
-                  icon: Icons.build_circle,
-                  color: Colors.orange,
-                  onTap: () => _selectNav(3),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: _buildModeCard(
-                  context: context,
-                  title: l10n.driverInstall,
-                  subtitle: l10n.driverInstallSubtitle,
-                  icon: Icons.usb,
-                  color: Colors.purple,
-                  onTap: () => _selectNav(4),
-                ),
-              ),
-            ],
+        ResponsivePairGrid(
+          breakpoint: 580,
+          first: _buildModeCard(
+            context: context,
+            title: l10n.simplePatch,
+            subtitle: l10n.simplePatchSubtitle,
+            icon: Icons.build_circle,
+            color: Colors.orange,
+            onTap: () => _selectNav(3),
+          ),
+          second: _buildModeCard(
+            context: context,
+            title: l10n.driverInstall,
+            subtitle: l10n.driverInstallSubtitle,
+            icon: Icons.usb,
+            color: Colors.purple,
+            onTap: () => _selectNav(4),
           ),
         ),
       ],
@@ -599,6 +788,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
   }
 
   Widget _buildRecentFiles(BuildContext context) {
+    final l10n = S.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Card(
@@ -644,7 +834,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
                     borderRadius: BorderRadius.circular(AppRadius.xs),
                   ),
                   child: Text(
-                    entry.exists ? entry.formattedSize : 'Missing',
+                    entry.exists ? entry.formattedSize : l10n.fileMissingBadge,
                     style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w500,
@@ -670,23 +860,17 @@ class _AppShellScreenState extends State<AppShellScreen> {
                 if (entry.exists)
                   IconButton(
                     icon: const Icon(Icons.folder_open_outlined, size: 18),
-                    tooltip: 'Open File Location',
+                    tooltip: l10n.openFileLocation,
                     onPressed: () => _fileService.openFileLocation(entry.path),
                   ),
                 IconButton(
                   icon: const Icon(Icons.close_rounded, size: 18),
-                  tooltip: 'Remove from list',
+                  tooltip: l10n.removeFromList,
                   onPressed: () async {
                     await _fileService.removeRecentFile(entry.path);
                     await _loadRecentFiles();
                   },
                 ),
-                if (entry.exists)
-                  Icon(
-                    Icons.arrow_forward_ios,
-                    size: 14,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
               ],
             ),
             onTap: entry.exists
@@ -696,11 +880,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
                   }
                 : () {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'This file no longer exists on disk. You can remove it from the list.',
-                        ),
-                      ),
+                      SnackBar(content: Text(l10n.recentFileMissingHint)),
                     );
                   },
           );
@@ -735,7 +915,7 @@ class _AppShellScreenState extends State<AppShellScreen> {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 380),
+          constraints: const BoxConstraints(maxWidth: 400),
           padding: const EdgeInsets.all(24),
           child: SingleChildScrollView(
             child: Column(
@@ -783,7 +963,10 @@ class _AppShellScreenState extends State<AppShellScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  l10n.appVersion(AppConfig.appVersion),
+                  l10n.appVersionWithBuild(
+                    AppConfig.appVersion,
+                    AppConfig.appBuildNumber,
+                  ),
                   style: TextStyle(
                     fontSize: 13,
                     color: colorScheme.onSurfaceVariant,

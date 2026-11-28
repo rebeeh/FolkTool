@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/config/app_semantic_colors.dart';
 import '../../../generated/l10n.dart';
 import '../models/kp_version.dart';
 import '../providers/version_provider.dart';
@@ -63,11 +64,25 @@ class VersionSelector extends StatelessWidget {
                   );
                 }
 
-                if (versionProvider.availableVersions.isEmpty) {
+                if (versionProvider.availableVersions.isEmpty &&
+                    versionProvider.selectedVersion?.isCustom != true) {
                   return _buildNoVersions(context);
                 }
 
-                return _buildVersionDropdown(context, versionProvider);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildVersionDropdown(context, versionProvider),
+                    if (versionProvider.selectedVersion != null) ...[
+                      const SizedBox(height: 12),
+                      _buildVersionDetailsCard(
+                        context,
+                        versionProvider.selectedVersion!,
+                        l10n,
+                      ),
+                    ],
+                  ],
+                );
               },
             ),
           ],
@@ -109,8 +124,9 @@ class VersionSelector extends StatelessWidget {
     ];
 
     return DropdownButtonFormField<KpVersion>(
-      key: ValueKey(selected),
+      key: ValueKey('${versionProvider.currentTarget.name}_${selected?.id}'),
       initialValue: selected,
+      isExpanded: true,
       items: items,
       onChanged: (KpVersion? version) async {
         if (version == null) {
@@ -124,15 +140,174 @@ class VersionSelector extends StatelessWidget {
 
   Widget _buildVersionItem(BuildContext context, KpVersion version) {
     final l10n = S.of(context);
-    if (version.isCustom) {
-      return Text(
-        l10n.versionCustom,
-        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-      );
-    }
     return Text(
-      '${version.source.displayName} ${version.version}',
+      version.displayTitle(l10n),
+      overflow: TextOverflow.ellipsis,
       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+    );
+  }
+
+  Widget _buildVersionDetailsCard(
+    BuildContext context,
+    KpVersion v,
+    S l10n,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final semantic = context.semantic;
+    final notes = v.localizedNotes(l10n);
+
+    final channelLabel = v.isPrerelease
+        ? l10n.versionChannelPrerelease
+        : (v.isLegacyChannel
+            ? l10n.versionChannelLegacy
+            : l10n.versionChannelStable);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              if (v.recommended)
+                _chip(
+                  l10n.versionRecommended,
+                  semantic.success,
+                  semantic.onSuccess,
+                ),
+              _chip(
+                v.isCustom ? l10n.versionCustom : channelLabel,
+                colorScheme.primaryContainer,
+                colorScheme.onPrimaryContainer,
+              ),
+              if (v.supportsUnpack)
+                _chip(
+                  l10n.versionSupportUnpack,
+                  colorScheme.secondaryContainer,
+                  colorScheme.onSecondaryContainer,
+                ),
+              if (v.sha256 != null && v.verifiedOnDisk)
+                _chip(
+                  l10n.versionVerifiedBadge,
+                  semantic.success.withValues(alpha: 0.14),
+                  semantic.success,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 14,
+            runSpacing: 6,
+            children: [
+              _metaItem(context, l10n.versionManagerLabel,
+                  '${v.source.displayName} ${v.managerVersion}'),
+              _metaItem(context, l10n.versionKpLabel, v.version),
+              if (v.releaseDate.isNotEmpty)
+                _metaItem(context, l10n.versionReleaseDateLabel, v.releaseDate),
+              if (v.kptoolsVersion != null)
+                _metaItem(context, l10n.versionKptoolsLabel, v.kptoolsVersion!),
+            ],
+          ),
+          if (v.androidSupport.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${l10n.versionCompatLabel}: ${v.androidSupport}',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+          if (notes.isNotEmpty && notes != v.androidSupport) ...[
+            const SizedBox(height: 4),
+            Text(
+              notes,
+              style: TextStyle(
+                fontSize: 11.5,
+                color: colorScheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+          ],
+          if (!v.supportsUnpack || v.isLegacyChannel) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: semantic.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: semantic.warning.withValues(alpha: 0.35),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    size: 16,
+                    color: semantic.warning,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      l10n.versionUnpackUnsupportedWarn(v.version),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String label, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: fg),
+      ),
+    );
+  }
+
+  Widget _metaItem(BuildContext context, String label, String value) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$label: ',
+          style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+            color: colorScheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 

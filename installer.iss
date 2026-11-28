@@ -4,6 +4,12 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.7.0"
 #endif
+#ifndef MyAppBuildNumber
+  #define MyAppBuildNumber "5"
+#endif
+#ifndef MyAppNumericVersion
+  #define MyAppNumericVersion MyAppVersion + "." + MyAppBuildNumber
+#endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "FolkTool"
 #endif
@@ -39,11 +45,13 @@ AppPublisherURL={#MyAppRepoUrl}
 AppSupportURL={#MyAppRepoUrl}/issues
 AppUpdatesURL={#MyAppRepoUrl}/releases
 AppCopyright=Copyright (C) 2026 Matsuzaka Yuki (GPL-3.0)
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
+VersionInfoTextVersion={#MyAppNumericVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Windows Setup
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppNumericVersion}
+VersionInfoProductTextVersion={#MyAppVersion}
 VersionInfoCopyright=Copyright (C) 2026 Matsuzaka Yuki (GPL-3.0)
 DefaultDirName={#DefaultInstallDir}
 DisableDirPage=no
@@ -57,6 +65,7 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+UsePreviousPrivileges=yes
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 SetupIconFile=assets\icons\icon.ico
@@ -179,12 +188,20 @@ end;
 
 function StopAppScopedProcesses(const AppDir: String): Boolean;
 var
-  NormalizedDir, PsCommand: String;
+  NormalizedDir, AdbExe, PsCommand: String;
   ResultCode: Integer;
 begin
   Result := True;
   NormalizedDir := RemoveBackslashUnlessRoot(Trim(AppDir));
   if NormalizedDir = '' then Exit;
+
+  // Ask bundled ADB daemon executing inside this install folder to exit gracefully first.
+  AdbExe := NormalizedDir + '\bin\adb.exe';
+  if FileExists(AdbExe) then
+  begin
+    Exec(AdbExe, 'kill-server', NormalizedDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(300);
+  end;
 
   // Terminate only app/helper processes executing out of FolkTool's install directory,
   // excluding the Inno Setup uninstaller stub itself and external system tools.
@@ -202,6 +219,85 @@ begin
 
   if Exec('powershell.exe', PsCommand, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     Result := (ResultCode = 0);
+end;
+
+function ExtractUninstallerExePath(const RawCmd: String): String;
+var
+  S: String;
+  EndQuoteIdx, SpaceIdx: Integer;
+begin
+  Result := '';
+  S := Trim(RawCmd);
+  if S = '' then Exit;
+  if Copy(S, 1, 1) = '"' then
+  begin
+    Delete(S, 1, 1);
+    EndQuoteIdx := Pos('"', S);
+    if EndQuoteIdx > 1 then
+      Result := Copy(S, 1, EndQuoteIdx - 1)
+    else
+      Result := S;
+  end
+  else
+  begin
+    SpaceIdx := Pos(' ', S);
+    if SpaceIdx > 1 then
+      Result := Copy(S, 1, SpaceIdx - 1)
+    else
+      Result := S;
+  end;
+end;
+
+procedure PruneStaleFolkToolUninstallEntriesInRoot(const RootKey: Integer);
+var
+  SubKeyPath, DispName, UninstStr, ExePath: String;
+begin
+  // Check primary AppId entry in this registry scope first
+  if RegQueryStringValue(RootKey, UninstallRegKey, 'UninstallString', UninstStr) then
+  begin
+    ExePath := ExtractUninstallerExePath(UninstStr);
+    if (ExePath <> '') and (not FileExists(ExePath)) then
+    begin
+      Log('Removing broken FolkTool uninstall registry entry (missing uninstaller): ' + ExePath);
+      RegDeleteKeyIncludingSubkeys(RootKey, UninstallRegKey);
+    end;
+  end;
+
+  // Also check legacy Inno entry if FolkTool 1.7.0 left a non-standard subkey name matching FolkTool
+  SubKeyPath := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\FolkTool_is1';
+  if RegQueryStringValue(RootKey, SubKeyPath, 'DisplayName', DispName) then
+  begin
+    if RegQueryStringValue(RootKey, SubKeyPath, 'UninstallString', UninstStr) then
+    begin
+      ExePath := ExtractUninstallerExePath(UninstStr);
+      if (ExePath = '') or (not FileExists(ExePath)) then
+      begin
+        Log('Removing stale legacy FolkTool_is1 uninstall entry: ' + DispName);
+        RegDeleteKeyIncludingSubkeys(RootKey, SubKeyPath);
+      end;
+    end;
+  end;
+end;
+
+procedure RemoveAlternateScopeRegistrations;
+begin
+  // Prevent dual HKLM + HKCU Uninstall entries when switching between per-user and all-users installs.
+  if IsAdminInstallMode then
+  begin
+    if RegKeyExists(HKCU, UninstallRegKey) then
+    begin
+      Log('Cleaning conflicting per-user HKCU uninstall key after all-users install.');
+      RegDeleteKeyIncludingSubkeys(HKCU, UninstallRegKey);
+    end;
+  end
+  else
+  begin
+    if RegKeyExists(HKLM64, UninstallRegKey) then
+    begin
+      Log('Cleaning conflicting HKLM uninstall key after per-user install.');
+      RegDeleteKeyIncludingSubkeys(HKLM64, UninstallRegKey);
+    end;
+  end;
 end;
 
 function BackupSettingsIfPresent: String;
@@ -541,16 +637,31 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   TargetDir, FailedItem, BackupFile: String;
-  IsCleanInstall, ShouldResetData: Boolean;
+  IsCleanInstall, ShouldResetData, HasUninsExe, HasUninsDat: Boolean;
 begin
   if CurStep = ssInstall then
   begin
-    TargetDir := ExpandConstant('{app}');
+    TargetDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+
+    // Prune any orphaned registry entries pointing to missing uninstaller executables.
+    PruneStaleFolkToolUninstallEntriesInRoot(HKCU);
+    if IsAdminInstallMode then
+      PruneStaleFolkToolUninstallEntriesInRoot(HKLM64);
 
     // Always ensure FolkTool processes inside the install folder are closed before replacing files.
     if not StopAppScopedProcesses(TargetDir) then
     begin
       RaiseException('FolkTool or one of its bundled tools in "' + TargetDir + '" is still running and could not be closed. Please close it and retry.');
+    end;
+
+    // Repair mismatch between unins000.exe and unins000.dat so uninstall metadata is never corrupted.
+    HasUninsExe := FileExists(TargetDir + '\unins000.exe');
+    HasUninsDat := FileExists(TargetDir + '\unins000.dat');
+    if HasUninsExe <> HasUninsDat then
+    begin
+      Log('Detected incomplete uninstaller pair in ' + TargetDir + '; resetting uninstaller files for clean repair.');
+      if HasUninsExe then DeleteFile(TargetDir + '\unins000.exe');
+      if HasUninsDat then DeleteFile(TargetDir + '\unins000.dat');
     end;
 
     IsCleanInstall := HasCmdSwitch('/CLEANINSTALL') or
@@ -561,7 +672,7 @@ begin
     if IsCleanInstall then
     begin
       if ExistingInstallFound and (ExistingInstallDir <> '') and
-         (Uppercase(ExistingInstallDir) <> Uppercase(RemoveBackslashUnlessRoot(TargetDir))) then
+         (Uppercase(ExistingInstallDir) <> Uppercase(TargetDir)) then
       begin
         StopAppScopedProcesses(ExistingInstallDir);
         if not RemoveAppOwnedFilesForCleanInstall(ExistingInstallDir, FailedItem) then
@@ -578,6 +689,38 @@ begin
           Log('Backed up FolkTool settings before reset to: ' + BackupFile);
         PurgeFolkToolAppData(False);
       end;
+    end;
+  end
+  else if CurStep = ssPostInstall then
+  begin
+    RemoveAlternateScopeRegistrations;
+  end;
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  AppDir: String;
+begin
+  Result := True;
+  AppDir := ExpandConstant('{app}');
+  Log('InitializeUninstall stopping app-scoped processes in: ' + AppDir);
+  if not StopAppScopedProcesses(AppDir) then
+  begin
+    if not UninstallSilent then
+    begin
+      if MsgBox(
+        'FolkTool or one of its bundled tools (adb/fastboot/kptools) appears to still be running from:' + #13#10 +
+        AppDir + #13#10#13#10 +
+        'Close FolkTool before continuing uninstall. Continue uninstall anyway?',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end
+    else
+    begin
+      Log('Warning: app-scoped processes may still hold locks prior to silent uninstall.');
     end;
   end;
 end;

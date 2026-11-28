@@ -1,6 +1,7 @@
 import 'dart:io';
 import '../../../core/config/app_config.dart';
 import '../../../core/errors/app_error.dart';
+import '../../../core/l10n/l10n_helper.dart';
 import '../../device/models/device_info.dart';
 
 /// Result of pre-flight safety checks executed before patching/flashing.
@@ -26,25 +27,32 @@ class SafetyService {
     0x41, 0x4E, 0x44, 0x52, 0x4F, 0x49, 0x44, 0x21, // "ANDROID!"
   ];
 
-  /// Checks whether the Linux kernel version falls within 3.18 – 6.15.
-  static bool isKernelCompatible(String? kernelVersion) {
+  /// Checks whether the Linux kernel version falls within [minKernel] – [maxKernel].
+  static bool isKernelCompatible(
+    String? kernelVersion, {
+    String minKernel = '3.18',
+    String maxKernel = '6.15',
+  }) {
     if (kernelVersion == null || kernelVersion.trim().isEmpty) {
       return false;
     }
     final match = RegExp(r'^(\d+)\.(\d+)').firstMatch(kernelVersion.trim());
-    if (match == null) {
-      return false;
-    }
+    if (match == null) return false;
     final major = int.tryParse(match.group(1) ?? '');
     final minor = int.tryParse(match.group(2) ?? '');
-    if (major == null || minor == null) {
-      return false;
-    }
+    if (major == null || minor == null) return false;
 
-    if (major < 3 || major > 6) return false;
-    if (major == 3 && minor < 18) return false;
-    if (major == 6 && minor > 15) return false;
-    return true;
+    final minParts = minKernel.split('.').map(int.tryParse).toList();
+    final maxParts = maxKernel.split('.').map(int.tryParse).toList();
+    final minMajor = minParts[0] ?? 3;
+    final minMinor = minParts.length > 1 ? (minParts[1] ?? 18) : 0;
+    final maxMajor = maxParts[0] ?? 6;
+    final maxMinor = maxParts.length > 1 ? (maxParts[1] ?? 15) : 99;
+
+    final cur = major * 1000 + minor;
+    final low = minMajor * 1000 + minMinor;
+    final high = maxMajor * 1000 + maxMinor;
+    return cur >= low && cur <= high;
   }
 
   /// Checks whether [path] starts with the standard `ANDROID!` boot image magic.
@@ -74,6 +82,9 @@ class SafetyService {
   Future<PreflightResult> runPreflightChecks({
     required String bootImagePath,
     String? kpimgPath,
+    String? kptoolsPathOverride,
+    String minKernel = '3.18',
+    String maxKernel = '6.15',
     List<String> kpmModules = const [],
     DeviceInfo? deviceInfo,
     int? batteryLevel,
@@ -82,6 +93,7 @@ class SafetyService {
     bool requireConnectedDevice = false,
     int connectedDeviceCount = 1,
   }) async {
+    final l10n = appL10n;
     final errors = <String>[];
     final warnings = <String>[];
     AppError? primaryError;
@@ -94,15 +106,14 @@ class SafetyService {
     final bootFile = File(bootImagePath);
     if (!await bootFile.exists()) {
       addError(
-        'Boot image not found: $bootImagePath',
+        l10n.errInputNotExist(bootImagePath),
         AppError(
           category: AppErrorCategory.file,
-          title: 'Boot Image Not Found',
-          message:
-              'The selected boot image file no longer exists or was moved.',
+          title: l10n.errTitleBootNotFound,
+          message: l10n.errMsgBootNotFound,
           affectedStage: 'Preflight',
           deviceSafe: true,
-          nextSteps: 'Select a valid boot.img file before starting.',
+          nextSteps: l10n.errNextSelectBoot,
           canSafelyRetry: true,
           technicalDetails: bootImagePath,
         ),
@@ -111,14 +122,14 @@ class SafetyService {
       final length = await bootFile.length();
       if (length == 0) {
         addError(
-          'Boot image file is empty: $bootImagePath',
+          l10n.errMsgEmptyBoot,
           AppError(
             category: AppErrorCategory.imageValidation,
-            title: 'Empty Boot Image',
-            message: 'The selected boot image file is 0 bytes.',
+            title: l10n.errTitleEmptyBoot,
+            message: l10n.errMsgEmptyBoot,
             affectedStage: 'Validation',
             deviceSafe: true,
-            nextSteps: 'Provide a valid, non-empty stock boot.img.',
+            nextSteps: l10n.errNextEmptyBoot,
             canSafelyRetry: true,
             technicalDetails: bootImagePath,
           ),
@@ -131,23 +142,19 @@ class SafetyService {
                 List.generate(8, (i) => header[i] == _androidBootMagic[i])
                     .every((matched) => matched);
             if (!matchesMagic) {
-              warnings.add(
-                'File header does not start with standard ANDROID! magic (some vendor/LZ4/vendor_boot images differ—verify before flashing).',
-              );
+              warnings.add(l10n.warnNonStandardBootMagic);
             }
           }
         } catch (e) {
           addError(
-            'Boot image is not readable: $bootImagePath',
+            l10n.errMsgCannotReadBoot,
             AppError(
               category: AppErrorCategory.permission,
-              title: 'Cannot Read Boot Image',
-              message:
-                  'FolkTool could not read the selected boot.img file. Check file permissions or close apps locking it.',
+              title: l10n.errTitleCannotReadBoot,
+              message: l10n.errMsgCannotReadBoot,
               affectedStage: 'Validation',
               deviceSafe: true,
-              nextSteps:
-                  'Ensure read permissions on the image file or copy it to a local folder.',
+              nextSteps: l10n.errNextCannotReadBoot,
               canSafelyRetry: true,
               technicalDetails: e.toString(),
             ),
@@ -160,16 +167,14 @@ class SafetyService {
       final kpFile = File(kpimgPath);
       if (!await kpFile.exists() || await kpFile.length() == 0) {
         addError(
-          'KernelPatch payload missing or empty: $kpimgPath',
+          l10n.errKpimgNotExist(kpimgPath),
           AppError(
             category: AppErrorCategory.file,
-            title: 'Missing KernelPatch Image (kpimg)',
-            message:
-                'The selected KernelPatch version file was not found or is empty.',
+            title: l10n.errTitleMissingKpimg,
+            message: l10n.errMsgMissingKpimg,
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps:
-                'Select a valid built-in or custom kpimg file before patching.',
+            nextSteps: l10n.errNextMissingKpimg,
             canSafelyRetry: true,
             technicalDetails: kpimgPath,
           ),
@@ -181,15 +186,14 @@ class SafetyService {
       final kpmFile = File(kpmPath);
       if (!await kpmFile.exists() || await kpmFile.length() == 0) {
         addError(
-          'KPM module missing or empty: $kpmPath',
+          l10n.errMsgInvalidKpm(kpmPath),
           AppError(
             category: AppErrorCategory.file,
-            title: 'Invalid KPM Module',
-            message:
-                'One of the selected KPM modules is missing or empty: $kpmPath',
+            title: l10n.errTitleInvalidKpm,
+            message: l10n.errMsgInvalidKpm(kpmPath),
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps: 'Remove the missing KPM module or re-select it.',
+            nextSteps: l10n.errNextInvalidKpm,
             canSafelyRetry: true,
             technicalDetails: kpmPath,
           ),
@@ -198,23 +202,28 @@ class SafetyService {
     }
 
     if (checkBinaries) {
+      final effectiveKptools =
+          (kptoolsPathOverride != null &&
+                  kptoolsPathOverride.isNotEmpty &&
+                  await File(kptoolsPathOverride).exists())
+              ? kptoolsPathOverride
+              : AppConfig.kptoolsPath;
       final requiredBins = <String, String>{
-        'kptools': AppConfig.kptoolsPath,
+        'kptools': effectiveKptools,
         'adb': AppConfig.adbPath,
         'fastboot': AppConfig.fastbootPath,
       };
       for (final entry in requiredBins.entries) {
         if (!await File(entry.value).exists()) {
           addError(
-            'Missing required binary (${entry.key}): ${entry.value}',
+            l10n.errMsgMissingTool(entry.key),
             AppError(
               category: AppErrorCategory.file,
-              title: 'Missing Required Tool (${entry.key})',
-              message:
-                  'Bundled tool ${entry.key} was not found at expected path.',
+              title: l10n.errTitleMissingTool(entry.key),
+              message: l10n.errMsgMissingTool(entry.key),
               affectedStage: 'Preflight',
               deviceSafe: true,
-              nextSteps: 'Reinstall FolkTool or restore the bin/ directory.',
+              nextSteps: l10n.errNextMissingTool,
               canSafelyRetry: false,
               technicalDetails: entry.value,
             ),
@@ -226,73 +235,98 @@ class SafetyService {
     if (requireConnectedDevice) {
       if (connectedDeviceCount > 1) {
         addError(
-          'Multiple devices connected ($connectedDeviceCount). Select a single target device.',
-          const AppError(
+          l10n.errMsgMultipleDevices,
+          AppError(
             category: AppErrorCategory.deviceConnection,
-            title: 'Multiple Devices Connected',
-            message: 'More than one device is connected to this PC.',
+            title: l10n.errTitleMultipleDevices,
+            message: l10n.errMsgMultipleDevices,
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps:
-                'Disconnect extra devices or choose one target device in Device Status.',
+            nextSteps: l10n.errNextMultipleDevices,
             canSafelyRetry: true,
           ),
         );
       } else if (deviceInfo == null ||
           deviceInfo.state == DeviceState.disconnected) {
         addError(
-          'No authorized device connected.',
-          const AppError(
+          l10n.errMsgNoDevice,
+          AppError(
             category: AppErrorCategory.deviceConnection,
-            title: 'No Device Connected',
-            message: 'No Android device was detected in ADB or Fastboot mode.',
+            title: l10n.errTitleNoDevice,
+            message: l10n.errMsgNoDevice,
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps:
-                'Connect your device via USB, enable USB debugging, or enter Fastboot mode.',
+            nextSteps: l10n.errNextNoDevice,
             canSafelyRetry: true,
           ),
         );
       } else if (deviceInfo.state == DeviceState.unauthorized) {
         addError(
-          'Device ${deviceInfo.serial} is unauthorized.',
+          l10n.errMsgUnauthorized(deviceInfo.serial),
           AppError(
             category: AppErrorCategory.adb,
-            title: 'Device Unauthorized',
-            message:
-                'Device ${deviceInfo.serial} has not authorized USB debugging.',
+            title: l10n.errTitleUnauthorized,
+            message: l10n.errMsgUnauthorized(deviceInfo.serial),
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps:
-                'Unlock the phone screen and accept the "Allow USB debugging" RSA prompt.',
+            nextSteps: l10n.errNextUnauthorized,
             canSafelyRetry: true,
           ),
         );
       } else if (deviceInfo.state == DeviceState.offline) {
         addError(
-          'Device ${deviceInfo.serial} is offline.',
+          l10n.errMsgOffline(deviceInfo.serial),
           AppError(
             category: AppErrorCategory.deviceConnection,
-            title: 'Device Offline',
-            message: 'Device ${deviceInfo.serial} is offline and unresponsive.',
+            title: l10n.errTitleOffline,
+            message: l10n.errMsgOffline(deviceInfo.serial),
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps: 'Reconnect the USB cable or toggle USB debugging.',
+            nextSteps: l10n.errNextOffline,
+            canSafelyRetry: true,
+          ),
+        );
+      } else if (deviceInfo.state == DeviceState.fastbootd) {
+        addError(
+          l10n.errMsgFastbootdBlocked(deviceInfo.serial),
+          AppError(
+            category: AppErrorCategory.fastboot,
+            title: l10n.errTitleFastbootdBlocked,
+            message: l10n.errMsgFastbootdBlocked(deviceInfo.serial),
+            affectedStage: 'Preflight',
+            deviceSafe: true,
+            nextSteps: l10n.fastbootdDetectedDesc,
+            canSafelyRetry: true,
+          ),
+        );
+      } else if (deviceInfo.state == DeviceState.recovery ||
+          deviceInfo.state == DeviceState.sideload ||
+          deviceInfo.state == DeviceState.unsupported) {
+        addError(
+          l10n.unsupportedModeDesc,
+          AppError(
+            category: AppErrorCategory.deviceConnection,
+            title: l10n.unsupportedModeTitle(
+              deviceInfo.localizedStateText(l10n),
+              deviceInfo.serial,
+            ),
+            message: l10n.unsupportedModeDesc,
+            affectedStage: 'Preflight',
+            deviceSafe: true,
+            nextSteps: l10n.errNextNoDevice,
             canSafelyRetry: true,
           ),
         );
       } else if (deviceInfo.bootloaderUnlocked == false) {
         addError(
-          'Bootloader is locked on ${deviceInfo.serial}.',
+          l10n.errMsgBootloaderLocked,
           AppError(
             category: AppErrorCategory.fastboot,
-            title: 'Bootloader Locked',
-            message:
-                'Flashing a patched boot image requires an unlocked bootloader.',
+            title: l10n.errTitleBootloaderLocked,
+            message: l10n.errMsgBootloaderLocked,
             affectedStage: 'Preflight',
             deviceSafe: true,
-            nextSteps:
-                'Unlock the bootloader first (note: unlocking wipes user data).',
+            nextSteps: l10n.errNextBootloaderLocked,
             canSafelyRetry: false,
           ),
         );
@@ -302,9 +336,16 @@ class SafetyService {
     if (deviceInfo != null &&
         deviceInfo.kernelVersion != null &&
         deviceInfo.kernelVersion!.isNotEmpty &&
-        !isKernelCompatible(deviceInfo.kernelVersion)) {
+        !isKernelCompatible(
+          deviceInfo.kernelVersion,
+          minKernel: minKernel,
+          maxKernel: maxKernel,
+        )) {
       warnings.add(
-        'Kernel version ${deviceInfo.kernelVersion} may be outside the supported 3.18 - 6.15 range.',
+        l10n.warnKernelOutOfRange(
+          deviceInfo.kernelVersion!,
+          '$minKernel - $maxKernel',
+        ),
       );
     }
 
@@ -312,7 +353,7 @@ class SafetyService {
     if (effectiveBattery != null &&
         effectiveBattery < minRecommendedBatteryPercent) {
       warnings.add(
-        'Device battery is low ($effectiveBattery%). Charge above $minRecommendedBatteryPercent% before flashing.',
+        l10n.warnLowBattery(effectiveBattery, minRecommendedBatteryPercent),
       );
     }
 
