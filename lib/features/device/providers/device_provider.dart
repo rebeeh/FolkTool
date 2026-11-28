@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../../core/config/app_config.dart';
+import '../../../core/l10n/l10n_helper.dart';
 import '../models/device_info.dart';
 import '../services/device_service.dart';
 
@@ -11,6 +12,9 @@ enum DeviceConnectionState {
   adbOffline,
   multipleDevices,
   fastbootConnected,
+  fastbootdConnected,
+  unsupportedMode,
+  error,
   checking,
 }
 
@@ -71,10 +75,12 @@ class DeviceProvider extends ChangeNotifier {
   Timer? _monitorTimer;
   String? _errorMessage;
   bool _driverInstalled = false;
+  ToolchainDiagnostics? _toolchainDiagnostics;
 
-  // Per-serial caches avoid repeating static property/fastboot lock queries every poll tick.
+  // Per-serial caches avoid repeating static property/fastboot queries every poll tick.
   final Map<String, _CachedDeviceProps> _adbMetadataCache = {};
   final Map<String, bool> _fastbootUnlockCache = {};
+  final Map<String, bool> _fastbootdCache = {};
   String? _lastClientCheckSerial;
 
   ClientInstallStatus _apatchStatus =
@@ -93,6 +99,12 @@ class DeviceProvider extends ChangeNotifier {
       _adbDevices.where((d) => d.state == DeviceState.unauthorized).toList();
   List<DeviceInfo> get offlineAdbDevices =>
       _adbDevices.where((d) => d.state == DeviceState.offline).toList();
+  List<DeviceInfo> get unsupportedDevices => _adbDevices
+      .where((d) =>
+          d.state == DeviceState.recovery ||
+          d.state == DeviceState.sideload ||
+          d.state == DeviceState.unsupported)
+      .toList();
   String? get selectedSerial => _selectedSerial;
   bool get isChecking => _isChecking;
   bool get isManualChecking => _isManualChecking;
@@ -100,8 +112,12 @@ class DeviceProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   String? get lastRawError => _deviceService.lastRawError;
   bool get driverInstalled => _driverInstalled;
+  ToolchainDiagnostics? get toolchainDiagnostics => _toolchainDiagnostics;
   bool get hasAdbDevice => authorizedAdbDevices.isNotEmpty;
-  bool get hasFastbootDevice => _fastbootDevices.isNotEmpty;
+  bool get hasFastbootDevice =>
+      _fastbootDevices.any((d) => d.state == DeviceState.fastboot);
+  bool get hasFastbootdDevice =>
+      _fastbootDevices.any((d) => d.state == DeviceState.fastbootd);
 
   bool get hasMultipleDevices {
     if (_selectedSerial != null) {
@@ -159,6 +175,13 @@ class DeviceProvider extends ChangeNotifier {
     _driverInstalled = await _deviceService.checkDriverInstalled(
       onLog: (line) => debugPrint('[DriverCheck] $line'),
     );
+    _toolchainDiagnostics = await _deviceService.getToolchainDiagnostics();
+    notifyListeners();
+  }
+
+  Future<void> refreshToolchainDiagnostics() async {
+    _toolchainDiagnostics = await _deviceService.getToolchainDiagnostics();
+    _driverInstalled = _toolchainDiagnostics?.toolsReady ?? false;
     notifyListeners();
   }
 
@@ -166,13 +189,18 @@ class DeviceProvider extends ChangeNotifier {
     if (hasMultipleDevices) {
       _connectionState = DeviceConnectionState.multipleDevices;
     } else if (_fastbootDevices.isNotEmpty) {
-      _connectionState = DeviceConnectionState.fastbootConnected;
+      final target = selectedTargetDevice ?? _fastbootDevices.first;
+      _connectionState = target.isFastbootd
+          ? DeviceConnectionState.fastbootdConnected
+          : DeviceConnectionState.fastbootConnected;
     } else if (authorizedAdbDevices.isNotEmpty) {
       _connectionState = DeviceConnectionState.adbConnected;
     } else if (unauthorizedAdbDevices.isNotEmpty) {
       _connectionState = DeviceConnectionState.adbUnauthorized;
     } else if (offlineAdbDevices.isNotEmpty) {
       _connectionState = DeviceConnectionState.adbOffline;
+    } else if (unsupportedDevices.isNotEmpty) {
+      _connectionState = DeviceConnectionState.unsupportedMode;
     } else {
       _connectionState = DeviceConnectionState.disconnected;
     }
@@ -194,6 +222,7 @@ class DeviceProvider extends ChangeNotifier {
     final activeFbSerials = _fastbootDevices.map((d) => d.serial).toSet();
     _adbMetadataCache.removeWhere((serial, _) => !activeAdbSerials.contains(serial));
     _fastbootUnlockCache.removeWhere((serial, _) => !activeFbSerials.contains(serial));
+    _fastbootdCache.removeWhere((serial, _) => !activeFbSerials.contains(serial));
     if (_lastClientCheckSerial != null &&
         !activeAdbSerials.contains(_lastClientCheckSerial)) {
       _lastClientCheckSerial = null;
@@ -245,7 +274,14 @@ class DeviceProvider extends ChangeNotifier {
       if (idx != -1) {
         _adbDevices[idx] = enriched;
       }
-    } else if (target != null && target.isFastboot) {
+    } else if (target != null && target.isAnyFastboot) {
+      var isUserspace = _fastbootdCache[target.serial];
+      if (isUserspace == null && !target.isFastbootd) {
+        isUserspace = await _deviceService.isUserspaceFastbootd(
+          serial: target.serial,
+        );
+        _fastbootdCache[target.serial] = isUserspace;
+      }
       var unlocked = _fastbootUnlockCache[target.serial];
       if (unlocked == null) {
         unlocked = await _deviceService.queryBootloaderUnlocked(
@@ -255,14 +291,15 @@ class DeviceProvider extends ChangeNotifier {
           _fastbootUnlockCache[target.serial] = unlocked;
         }
       }
-      if (unlocked != null) {
-        final idx =
-            _fastbootDevices.indexWhere((d) => d.serial == target.serial);
-        if (idx != -1) {
-          _fastbootDevices[idx] = _fastbootDevices[idx].copyWith(
-            bootloaderUnlocked: unlocked,
-          );
-        }
+      final idx =
+          _fastbootDevices.indexWhere((d) => d.serial == target.serial);
+      if (idx != -1) {
+        _fastbootDevices[idx] = _fastbootDevices[idx].copyWith(
+          state: (isUserspace == true || _fastbootDevices[idx].isFastbootd)
+              ? DeviceState.fastbootd
+              : DeviceState.fastboot,
+          bootloaderUnlocked: unlocked ?? _fastbootDevices[idx].bootloaderUnlocked,
+        );
       }
     }
 
@@ -273,6 +310,18 @@ class DeviceProvider extends ChangeNotifier {
       if (activeSerial != null && activeSerial != _lastClientCheckSerial) {
         await checkInstalledClients();
       }
+    }
+  }
+
+  /// Active operation polling method used by [PatchProvider] during flashing flows.
+  Future<void> pollDuringOperation() async {
+    if (_isChecking) return;
+    _isChecking = true;
+    try {
+      await _pollDevices();
+    } finally {
+      _isChecking = false;
+      notifyListeners();
     }
   }
 
@@ -288,7 +337,7 @@ class DeviceProvider extends ChangeNotifier {
       await _pollDevices();
     } catch (e) {
       _errorMessage = e.toString();
-      _connectionState = DeviceConnectionState.disconnected;
+      _connectionState = DeviceConnectionState.error;
     } finally {
       _isChecking = false;
     }
@@ -311,7 +360,7 @@ class DeviceProvider extends ChangeNotifier {
       await _pollDevices();
     } catch (e) {
       _errorMessage = e.toString();
-      _connectionState = DeviceConnectionState.disconnected;
+      _connectionState = DeviceConnectionState.error;
     } finally {
       _isChecking = false;
       _isManualChecking = false;
@@ -341,26 +390,50 @@ class DeviceProvider extends ChangeNotifier {
 
     if (success) {
       await Future.delayed(const Duration(seconds: 2));
-      await waitForFastboot();
+      await waitForFastboot(expectedSerial: serial);
     }
 
     return success;
   }
 
+  Future<bool> rebootFastbootdToBootloader() async {
+    if (!hasFastbootdDevice) return false;
+    final serial = selectedTargetDevice?.serial;
+    final ok = await _deviceService.rebootFastbootdToBootloader(
+      serial: serial,
+      onLog: (line) => debugPrint('[RebootBootloader] $line'),
+    );
+    if (ok) {
+      _fastbootdCache.remove(serial);
+      await Future.delayed(const Duration(seconds: 2));
+      await waitForFastboot(expectedSerial: serial);
+    }
+    return ok;
+  }
+
   Future<bool> waitForFastboot({
     Duration timeout = const Duration(seconds: 60),
+    String? expectedSerial,
   }) async {
     final device = await _deviceService.waitForFastbootDevice(
       timeout: timeout,
+      expectedSerial: expectedSerial ?? _selectedSerial,
       onLog: (line) => debugPrint('[WaitFastboot] $line'),
     );
 
     if (device != null) {
-      _fastbootDevices = [device];
-      _selectedSerial = device.serial;
-      _connectionState = DeviceConnectionState.fastbootConnected;
+      final isUserspace =
+          await _deviceService.isUserspaceFastbootd(serial: device.serial);
+      final normalized = isUserspace
+          ? device.copyWith(state: DeviceState.fastbootd)
+          : device;
+      _fastbootDevices = [normalized];
+      _selectedSerial = normalized.serial;
+      _connectionState = normalized.isFastbootd
+          ? DeviceConnectionState.fastbootdConnected
+          : DeviceConnectionState.fastbootConnected;
       notifyListeners();
-      return true;
+      return normalized.state == DeviceState.fastboot;
     }
     return false;
   }
@@ -475,7 +548,7 @@ class DeviceProvider extends ChangeNotifier {
     void Function(String)? onLog,
   }) async {
     if (!hasAdbDevice) {
-      onLog?.call('未检测到 ADB 设备');
+      onLog?.call(appL10n.logNoAdbDevice);
       return false;
     }
 
