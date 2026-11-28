@@ -248,7 +248,7 @@ class _DriverInstallScreenState extends State<DriverInstallScreen> {
               Text(
                 _lastInstallResult!.launched
                     ? l10n.driverLaunchedResult(
-                        _lastInstallResult!.signature?.status.name ??
+                        _lastInstallResult!.signature?.status ??
                             l10n.versionVerifiedBadge,
                       )
                     : (_lastInstallResult!.errorMessage ??
