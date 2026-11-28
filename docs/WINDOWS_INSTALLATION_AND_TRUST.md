@@ -6,7 +6,7 @@ FolkTool targets **Windows 10 / 11 x64** (`flutter build windows --release --dar
 
 1. **Application binary (`FolkTool.exe`)**:
    - Compiled by MSVC via `windows/CMakeLists.txt` and `windows/runner/Runner.rc`.
-   - Declares `<requestedExecutionLevel level="asInvoker" uiAccess="false"/>` in `windows/runner/runner.exe.manifest` so normal app usage runs under standard user privileges without triggering full-app UAC elevation.
+   - Declares `/MANIFESTUAC:level='asInvoker' uiAccess='false'` in `windows/runner/CMakeLists.txt` alongside `windows/runner/runner.exe.manifest` (`PerMonitorV2` DPI awareness) so normal app usage runs under standard user privileges without triggering full-app UAC elevation.
    - Creates a session-scoped named mutex (`Local\FolkToolRunningMutex`) in `windows/runner/main.cpp` so upgrades and uninstallers reliably detect running instances.
    - Embeds `assets/icons/icon.ico` (multi-resolution `16x16`, `24x24`, `32x32`, `48x48`, `64x64`, `128x128`, `256x256`) directly via `IDI_APP_ICON`.
 2. **Installer (`FolkTool-Setup.exe`) & Uninstaller (`unins000.exe`)**:
